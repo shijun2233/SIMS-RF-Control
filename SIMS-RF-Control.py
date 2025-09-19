@@ -26,7 +26,9 @@ from PyQt5.QtWidgets import (
 
 import serial
 from serial.tools import list_ports
+
 HAS_PYSERIAL = True
+
 
 # --------------------------- TDKPowerSupply ---------------------------
 class TDKPowerSupply:
@@ -76,21 +78,21 @@ class TDKPowerSupply:
                 # 清空输入输出缓冲区
                 self.serial.flushInput()
                 self.serial.flushOutput()
-                
+
                 # 先选择设备地址
                 select_cmd = f"INSTrument:NSELect {self.address}\n"
                 self.serial.write(select_cmd.encode('ascii'))
                 time.sleep(0.1)  # 增加设备选择等待时间
-                
+
                 # 发送实际命令
                 full_command = f"{command}\n"
                 self.serial.write(full_command.encode('ascii'))
                 self.logger.debug(f"发送命令: {full_command.strip()}")
-                
+
                 # 如果需要响应，读取并返回
                 if get_response:
                     time.sleep(0.15)  # 增加响应等待时间
-                    
+
                     # 检查是否有数据可读
                     if self.serial.in_waiting > 0:
                         response = self.serial.read_until(b'\n').decode('ascii', errors='ignore').strip()
@@ -109,11 +111,12 @@ class TDKPowerSupply:
                 else:
                     # 设置命令，等待一下让设备处理
                     time.sleep(0.05)
-                
+
                 return None
             except Exception as e:
                 self.logger.error(f"地址{self.address}命令发送失败: {str(e)}")
                 return None
+
     def set_voltage(self, voltage: float) -> bool:
         """
         设置输出电压
@@ -232,26 +235,25 @@ class TDKPowerSupply:
         """获取电源标识信息"""
         return self.send_command("*IDN?", get_response=True)
 
-
     def test_communication(self) -> bool:
         """测试与电源的基本通信"""
         try:
             # 尝试多个命令来测试通信
             test_commands = ["*IDN?", ":VOLT?", ":CURR?", "OUTP?"]
-            
+
             for cmd in test_commands:
                 self.logger.debug(f"测试命令: {cmd}")
                 response = self.send_command(cmd, get_response=True)
-                
+
                 # 如果收到任何非空响应，说明通信成功
                 if response and response.strip():
                     self.logger.info(f"地址{self.address}: 通信测试成功，命令 {cmd} 响应: {response}")
                     return True
-            
+
             # 所有命令都没有响应
             self.logger.warning(f"地址{self.address}: 通信测试失败 - 所有命令无响应")
             return False
-            
+
         except Exception as e:
             self.logger.error(f"地址{self.address}: 通信测试异常: {e}")
             return False
@@ -266,7 +268,7 @@ class TDKPowerSupply:
             debug_info['actual_voltage'] = self.get_actual_voltage()
             debug_info['actual_current'] = self.get_actual_current()
             debug_info['output_status'] = self.get_output_status()
-            
+
             self.logger.info(f"地址{self.address} 调试信息: {debug_info}")
             return debug_info
         except Exception as e:
@@ -276,6 +278,7 @@ class TDKPowerSupply:
     def reset(self) -> None:
         """重置电源到默认状态"""
         self.send_command("*RST", get_response=False)
+
 
 # --------------------------- PowerThread ---------------------------
 class PowerThread(QThread):
@@ -305,7 +308,7 @@ class PowerThread(QThread):
             return
 
         self._power_supply = self._widget._power_supply
-        
+
         if self._power_supply.connect():
             try:
                 idn = self._power_supply.get_id()
@@ -321,7 +324,7 @@ class PowerThread(QThread):
             # 仅在开启输出时重置电源
             self.log(f"{self.name}: 正在重置电源 (地址{self._power_supply.address})...")
             self._power_supply.reset()
-            time.sleep(0.2) # 等待重置完成
+            time.sleep(0.2)  # 等待重置完成
 
             self._power_supply.set_voltage(self._target_v)
             self._power_supply.set_current(self._target_i)
@@ -376,26 +379,26 @@ class PowerThread(QThread):
         self._target_v = voltage
         self._target_i = current
         self.log(f"{self.name}: 设置请求 - 电压{voltage:.3f}V 电流{current:.3f}A")
-        
+
         if self._power_supply:
             try:
                 self._reading_paused = True
                 self.log(f"{self.name}: 暂停数据读取，开始设置参数...")
-                
+
                 self.log(f"{self.name}: 正在设置电压 {voltage:.3f}V...")
                 voltage_success = self._power_supply.set_voltage(voltage)
-                
+
                 self.log(f"{self.name}: 正在设置电流 {current:.3f}A...")
                 current_success = self._power_supply.set_current(current)
-                
+
                 self.log(f"{self.name}: 设置完成，恢复数据读取")
                 self._reading_paused = False
-                
+
                 if voltage_success and current_success:
                     self.log(f"{self.name}: 设置完成 - 电压{voltage:.3f}V 电流{current:.3f}A")
                 else:
                     self.log(f"{self.name}: 设置可能失败")
-                    
+
             except Exception as e:
                 self._reading_paused = False
                 self.log(f"{self.name} 设置异常: {e}")
@@ -404,6 +407,7 @@ class PowerThread(QThread):
     def log(self, msg: str):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.log_signal.emit(f"[{timestamp}] {msg}")
+
 
 # --------------------------- PowerWidget (single side) ---------------------------
 # --------------------------- PowerWidget (single side) ---------------------------
@@ -415,6 +419,9 @@ class PowerWidget(QWidget):
         self.name = name
         self._power_supply = None
         self._build_ui()
+        
+        # 连接地址输入框的信号
+        self.edit_addr.textChanged.connect(self._validate_address)
 
     def _build_ui(self):
         title = QLabel(f"{self.name}")
@@ -424,11 +431,10 @@ class PowerWidget(QWidget):
         # 串口通讯设置区（只保留地址）
         comm_group = QGroupBox('设备地址')
         comm_grid = QGridLayout()
-        comm_grid.addWidget(QLabel('地址:'), 0, 0)
+        comm_grid.addWidget(QLabel('地址 (1-30):'), 0, 0)
         self.edit_addr = QLineEdit('6' if self.name == '射频电源' else '7')
-        # 设置地址为只读，固定不变
-        self.edit_addr.setReadOnly(True)
-        self.edit_addr.setStyleSheet('background-color: #f0f0f0; color: #666;')
+        # 设置地址输入框提示文本
+        self.edit_addr.setPlaceholderText('输入1-30的整数')
         # 添加键盘事件处理
         self.edit_addr.keyPressEvent = lambda event: self._handle_lineedit_key_event(event, self.edit_addr)
         comm_grid.addWidget(self.edit_addr, 0, 1)
@@ -453,9 +459,9 @@ class PowerWidget(QWidget):
         # 添加键盘事件处理
         self.spin_i.keyPressEvent = lambda event: self._handle_spinbox_key_event(event, self.spin_i)
         grid.addWidget(self.spin_i, 1, 1)
-        
+
         # 添加电流限制提示
-        current_limit_label = QLabel('最大电流0.6A，超出会设为0.6A')
+        current_limit_label = QLabel('最大电流3.5A，超出会设为3.5A')
         current_limit_label.setStyleSheet('font-size: 9px; color: #666;')
         grid.addWidget(current_limit_label, 2, 0, 1, 2)
 
@@ -548,33 +554,56 @@ class PowerWidget(QWidget):
     def _handle_lineedit_key_event(self, event, lineedit):
         """处理LineEdit的键盘事件"""
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            # 地址输入框回车时重新连接设备
-            self.parent().parent().update_device_connection()
+            # 回车时先验证地址
+            if self._validate_address():
+                self.parent().parent().update_device_connection()
         else:
             # 调用原始的keyPressEvent
             QLineEdit.keyPressEvent(lineedit, event)
+            
+    def _validate_address(self) -> bool:
+        """验证地址输入是否有效"""
+        addr_text = self.edit_addr.text().strip()
+        try:
+            addr = int(addr_text)
+            if 1 <= addr <= 30:
+                self.edit_addr.setStyleSheet('')
+                self.lbl_device_info.setText('未连接')
+                self.lbl_device_info.setStyleSheet('color: #666;')
+                return True
+            else:
+                self.edit_addr.setStyleSheet('background-color: #ffe0e0;')
+                self.lbl_device_info.setText('地址必须在1-30范围内')
+                self.lbl_device_info.setStyleSheet('color: red;')
+                return False
+        except ValueError:
+            if addr_text:  # 只在非空输入时显示错误
+                self.edit_addr.setStyleSheet('background-color: #ffe0e0;')
+                self.lbl_device_info.setText('请输入有效的整数')
+                self.lbl_device_info.setStyleSheet('color: red;')
+            return False
 
     def _on_set(self):
         if not self._power_supply:
             QMessageBox.warning(self, "未连接", "请先连接电源设备")
             return
-            
+
         v = float(self.spin_v.value())
         i = float(self.spin_i.value())
-        
-        # 限制最大电流为0.6A
-        if i > 0.6:
-            i = 0.6
+
+        # 限制最大电流为3.5A
+        if i > 3.5:
+            i = 3.5
             # 更新UI显示，让用户知道值被限制了
             self.spin_i.setValue(i)
-            
+
         self.set_targets_signal.emit(v, i)
 
     def start_request(self, start: bool):
         if start and not self._power_supply:
             QMessageBox.warning(self, "未连接", "请先连接电源设备")
             return
-            
+
         self.btn_start.setEnabled(not start)
         self.btn_stop.setEnabled(start)
         self.parent().parent().power_start_stop(self.name, start)
@@ -583,9 +612,20 @@ class PowerWidget(QWidget):
         """由MainWindow调用，更新连接状态"""
         if connected and serial_conn:
             try:
-                addr = int(self.edit_addr.text().strip())
+                # 验证地址输入
+                addr_text = self.edit_addr.text().strip()
+                try:
+                    addr = int(addr_text)
+                    if not 1 <= addr <= 30:
+                        raise ValueError("地址必须在1-30范围内")
+                except ValueError as e:
+                    self.lbl_device_info.setText(f'地址无效: {str(e)}')
+                    self.lbl_device_info.setStyleSheet('color: red;')
+                    self._power_supply = None
+                    return
+                    
                 self._power_supply = TDKPowerSupply(address=addr, serial_connection=serial_conn)
-                
+
                 # 测试基本通信
                 if self._power_supply.test_communication():
                     # 尝试获取设备ID
@@ -603,7 +643,7 @@ class PowerWidget(QWidget):
                     self.lbl_device_info.setStyleSheet('color: red;')
                     self.parent().parent().append_log(f"{self.name}: 地址{addr} 通信失败")
                     self._power_supply = None
-                    
+
             except ValueError:
                 self.lbl_device_info.setText('地址无效')
                 self.lbl_device_info.setStyleSheet('color: red;')
@@ -623,6 +663,7 @@ class PowerWidget(QWidget):
         self.lbl_v.setText(f"{v:.3f} V")
         self.lbl_i.setText(f"{i:.3f} A")
         self.lbl_p.setText(f"{p:.3f} W")
+
 
 # --------------------------- CommConfigDialog ---------------------------
 class CommConfigDialog(QDialog):
@@ -694,6 +735,7 @@ class CommConfigDialog(QDialog):
                 params['port'] = 5025
         return {'mode': mode, 'params': params}
 
+
 # --------------------------- MainWindow ---------------------------
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -703,8 +745,8 @@ class MainWindow(QMainWindow):
         self.shared_serial = None
 
         # 配置日志系统以显示调试信息
-        logging.basicConfig(level=logging.DEBUG, 
-                          format='%(levelname)s:%(name)s:%(message)s')
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(levelname)s:%(name)s:%(message)s')
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -716,8 +758,8 @@ class MainWindow(QMainWindow):
         self.right_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         # connect set signals
-        self.left_widget.set_targets_signal.connect(lambda v, i: self._on_set('电源1', v, i))
-        self.right_widget.set_targets_signal.connect(lambda v, i: self._on_set('电源2', v, i))
+        self.left_widget.set_targets_signal.connect(lambda v, i: self._on_set('射频电源', v, i))
+        self.right_widget.set_targets_signal.connect(lambda v, i: self._on_set('等离子体偏压电源', v, i))
 
         # log area
         self.log_edit = QTextEdit()
@@ -732,12 +774,12 @@ class MainWindow(QMainWindow):
         self.port_combo.keyPressEvent = lambda event: self._handle_combo_key_event(event, self.port_combo)
         self.baud_combo = QComboBox()
         self.baud_combo.addItems(['9600', '19200', '38400', '57600', '115200'])
-        self.baud_combo.setCurrentText('115200')
+        self.baud_combo.setCurrentText('9600')
         # 添加键盘事件处理
         self.baud_combo.keyPressEvent = lambda event: self._handle_combo_key_event(event, self.baud_combo)
         self.connect_btn = QPushButton('连接')
         self.refresh_btn = QPushButton('刷新')
-        
+
         comm_layout.addWidget(QLabel("串口:"))
         comm_layout.addWidget(self.port_combo)
         comm_layout.addWidget(QLabel("波特率:"))
@@ -751,7 +793,7 @@ class MainWindow(QMainWindow):
 
         # layout
         main_layout = QGridLayout()
-        main_layout.addWidget(comm_group, 0, 0, 1, 2) # 串口设置在最上面
+        main_layout.addWidget(comm_group, 0, 0, 1, 2)  # 串口设置在最上面
         main_layout.addWidget(self.left_widget, 1, 0)
         main_layout.addWidget(self.right_widget, 1, 1)
         main_layout.addWidget(self.log_edit, 2, 0, 1, 2)  # 日志区域跨越两列
@@ -824,7 +866,7 @@ class MainWindow(QMainWindow):
                 self.port_combo.setEnabled(False)
                 self.baud_combo.setEnabled(False)
                 self.refresh_btn.setEnabled(False)
-                
+
                 # 立即更新设备连接状态，不添加延迟
                 self.left_widget.update_connection_status(True, self.shared_serial)
                 self.right_widget.update_connection_status(True, self.shared_serial)
@@ -858,8 +900,8 @@ class MainWindow(QMainWindow):
     # called from PowerWidget when start/stop pressed
     def power_start_stop(self, name: str, start: bool):
         if start:
-            widget = self.left_widget if name == '电源1' else self.right_widget
-            
+            widget = self.left_widget if name == '射频电源' else self.right_widget
+
             if not widget._power_supply:
                 error_msg = "请先连接电源设备"
                 QMessageBox.warning(self, "未连接", error_msg)
@@ -867,20 +909,20 @@ class MainWindow(QMainWindow):
                 widget.btn_start.setEnabled(True)
                 widget.btn_stop.setEnabled(False)
                 return
-                
+
             # 启动线程
             th = PowerThread(name=name, widget=widget)
             self.append_log(f"{name}: 启动")
-            
+
             # 连接信号并启动线程 - 移除所有同步操作，立即启动
             th.data_signal.connect(self._on_data)
             th.log_signal.connect(self.append_log)
             th.status_signal.connect(lambda s: self.append_log(f"[{name}] {s}"))
-            
+
             # 立即启动线程，不等待
             th.start()
             self.threads[name] = th
-            
+
             # 立即返回，不做任何等待
             return
         else:
@@ -890,13 +932,13 @@ class MainWindow(QMainWindow):
                 del self.threads[name]
 
     def _on_set(self, name: str, v: float, i: float):
-        widget = self.left_widget if name == '电源1' else self.right_widget
+        widget = self.left_widget if name == '射频电源' else self.right_widget
         if not widget._power_supply:
             QMessageBox.warning(self, "未连接", "请先连接电源设备")
             return
-            
+
         self.append_log(f"{name}: 设置 电压{v:.3f}V 电流{i:.3f}A")
-        
+
         th = self.threads.get(name)
         if th:
             th.set_targets(v, i)
@@ -929,12 +971,14 @@ class MainWindow(QMainWindow):
             self.shared_serial.close()
         event.accept()
 
+
 # --------------------------- main ---------------------------
 def main():
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
     sys.exit(app.exec_())
+
 
 if __name__ == '__main__':
     main()
