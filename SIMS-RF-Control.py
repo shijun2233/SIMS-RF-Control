@@ -585,7 +585,7 @@ class PowerWidget(QWidget):
 
     def _on_set(self):
         if not self._power_supply:
-            QMessageBox.warning(self, "未连接", "请先连接电源设备")
+            self.parent().parent().append_log(f"{self.name}: 未连接设备，请先连接")
             return
 
         v = float(self.spin_v.value())
@@ -594,9 +594,11 @@ class PowerWidget(QWidget):
         # 限制最大电流为3.5A
         if i > 3.5:
             i = 3.5
-            # 更新UI显示，让用户知道值被限制了
+            # 更新UI显示并记录日志
             self.spin_i.setValue(i)
+            self.parent().parent().append_log(f"{self.name}: 电流已被限制为3.5A")
 
+        # 直接发送设置信号，不做额外检查
         self.set_targets_signal.emit(v, i)
 
     def start_request(self, start: bool):
@@ -607,6 +609,18 @@ class PowerWidget(QWidget):
         self.btn_start.setEnabled(not start)
         self.btn_stop.setEnabled(start)
         self.parent().parent().power_start_stop(self.name, start)
+
+    def _format_idn_response(self, idn_str: str) -> str:
+        """格式化 *IDN? 响应信息"""
+        if not idn_str:
+            return "未知设备"
+        
+        try:
+            # IDN格式通常为: <厂商>,<型号>,<序列号>,<版本>
+            # 直接返回完整响应
+            return idn_str.strip()
+        except:
+            return "未知设备"
 
     def update_connection_status(self, connected: bool, serial_conn=None):
         """由MainWindow调用，更新连接状态"""
@@ -626,22 +640,24 @@ class PowerWidget(QWidget):
                     
                 self._power_supply = TDKPowerSupply(address=addr, serial_connection=serial_conn)
 
-                # 测试基本通信
-                if self._power_supply.test_communication():
-                    # 尝试获取设备ID
+                # 获取电源信息和状态
+                try:
+                    # 获取完整的电源标识信息
                     idn = self._power_supply.get_id()
-                    if idn and idn.strip():
-                        self.lbl_device_info.setText(f'设备标识: \n{idn}')
+                    device_info = self._format_idn_response(idn)
+                    
+                    # 检查通信是否正常
+                    current = self._power_supply.get_actual_current()
+                    if current is not None:  # 只要能读取到电流值就认为连接成功
+                        self.lbl_device_info.setText(f'已连接: {device_info}')
                         self.lbl_device_info.setStyleSheet('color: #000;')
-                        self.parent().parent().append_log(f"{self.name}: 连接成功 - {idn}")
+                        self.parent().parent().append_log(f"{self.name}: 连接成功 - {device_info}")
                     else:
-                        self.lbl_device_info.setText('已连接(标识获取失败)')
-                        self.lbl_device_info.setStyleSheet('color: orange;')
-                        self.parent().parent().append_log(f"{self.name}: 连接成功但无法获取设备标识")
-                else:
-                    self.lbl_device_info.setText('通信失败')
+                        raise ValueError('无法读取电源数据')
+                except Exception as e:
+                    self.lbl_device_info.setText('连接失败')
                     self.lbl_device_info.setStyleSheet('color: red;')
-                    self.parent().parent().append_log(f"{self.name}: 地址{addr} 通信失败")
+                    self.parent().parent().append_log(f"{self.name}: 连接失败 - {str(e)}")
                     self._power_supply = None
 
             except ValueError:
@@ -934,17 +950,21 @@ class MainWindow(QMainWindow):
     def _on_set(self, name: str, v: float, i: float):
         widget = self.left_widget if name == '射频电源' else self.right_widget
         if not widget._power_supply:
-            QMessageBox.warning(self, "未连接", "请先连接电源设备")
+            self.append_log(f"{name}: 未连接设备，无法设置")
             return
 
         self.append_log(f"{name}: 设置 电压{v:.3f}V 电流{i:.3f}A")
 
-        th = self.threads.get(name)
-        if th:
-            th.set_targets(v, i)
-        else:
-            self.append_log(f"{name}: 未启动，请先启动电源")
-            QMessageBox.warning(self, "未启动", "请先启动电源再进行设置")
+        # 直接设置电压电流值
+        try:
+            widget._power_supply.set_voltage(v)
+            widget._power_supply.set_current(i)
+            # 如果有运行的线程，也更新目标值
+            th = self.threads.get(name)
+            if th:
+                th.set_targets(v, i)
+        except Exception as e:
+            self.append_log(f"{name}: 设置失败 - {str(e)}")
 
     def _on_data(self, v, i, p, ts, name):
         # 更新UI显示，不输出数据日志（避免日志刷屏）
