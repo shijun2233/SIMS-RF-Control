@@ -908,7 +908,7 @@ class MainWindow(QMainWindow):
         helpm.addAction(about_act)
 
     def _about(self):
-        QMessageBox.information(self, '关于', '电源控制界面')
+        QMessageBox.information(self, '关于', 'SIMS射频电源软件')
 
     def append_log(self, text: str):
         self.log_edit.append(text)
@@ -1912,7 +1912,7 @@ class MainWindow(QMainWindow):
         helpm.addAction(about_act)
 
     def _about(self):
-        QMessageBox.information(self, '关于', '电源控制界面')
+        QMessageBox.information(self, '关于', 'SIMS射频控制电源\n版本 1.0\n')
 
     def append_log(self, text: str):
         self.log_edit.append(text)
