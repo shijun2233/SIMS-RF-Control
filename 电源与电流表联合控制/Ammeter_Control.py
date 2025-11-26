@@ -6,17 +6,12 @@ from enum import Enum
 
 # 设备常量定义（源自用户手册）
 MAX_CURRENT_6485 = 0.021  # 6485最大电流21mA
-MAX_CURRENT_6487 = 0.021  # 6487最大电流21mA
 MAX_VOLTAGE_6485 = 220    # 6485最大输入电压220V峰值
-MAX_VOLTAGE_6487 = 505    # 6487最大输入电压505V峰值
-VOLTAGE_RANGES_6487 = [10, 50, 500]  # 6487电压源量程
-CURRENT_CLAMPS_6487 = [2.5e-5, 2.5e-4, 2.5e-3, 2.5e-2]  # 6487电流钳位选项
 MEASURE_RANGES = [2e-9, 2e-8, 2e-7, 2e-6, 2e-5, 2e-4, 2e-3, 2.1e-2]  # 8个电流量程（2nA~21mA）
 
 class InstrumentModel(Enum):
     """仪器型号枚举"""
     MODEL_6485 = "6485"
-    MODEL_6487 = "6487"
 
 class FilterType(Enum):
     """滤波器类型枚举"""
@@ -24,7 +19,7 @@ class FilterType(Enum):
     AVERAGE = "AVER"
 
 class KeithleyPicoammeter:
-    """Keithley 6485/6487 皮安表SCPI控制库"""
+    """Keithley 6485 皮安表SCPI控制库"""
     
     def __init__(
         self,
@@ -83,9 +78,6 @@ class KeithleyPicoammeter:
     def disconnect(self) -> None:
         """断开串口连接"""
         if self.serial and self.serial.is_open:
-            # 关闭电压源（仅6487）
-            if self.model == InstrumentModel.MODEL_6487:
-                self.set_voltage_source_status(False)
             self.serial.close()
         self._is_connected = False
         print("已断开连接")
@@ -150,8 +142,7 @@ class KeithleyPicoammeter:
             print(f"无效量程，可选量程：{MEASURE_RANGES}")
             return False
         # 检查电压安全限制
-        if (self.model == InstrumentModel.MODEL_6485 and range_val >= 2e-3) or \
-           (self.model == InstrumentModel.MODEL_6487 and range_val >= 2e-3):
+        if (self.model == InstrumentModel.MODEL_6485 and range_val >= 2e-3):
             print(f"警告：{range_val}A量程下输入电压不得超过60V")
         
         cmd = f"RANG {range_val:.9f}"
@@ -247,7 +238,7 @@ class KeithleyPicoammeter:
         配置数据缓冲区
         :param sample_count: 采样点数（6485最大2500，6487最大3000）
         """
-        max_samples = 2500 if self.model == InstrumentModel.MODEL_6485 else 3000
+        max_samples = 2500 
         if sample_count < 1 or sample_count > max_samples:
             print(f"无效采样点数，最大支持{max_samples}点")
             return False
@@ -300,15 +291,6 @@ class KeithleyPicoammeter:
             print(f"缓冲区采集失败：{str(e)}")
             self.send_command("DISP:ENAB ON")
             return None
-
-    # ------------------------------ 辅助函数 ------------------------------
-    def _get_nearest_voltage_range(self, voltage: float) -> int:
-        """获取最接近的电压量程（仅6487）"""
-        voltage = abs(voltage)
-        for range_val in sorted(VOLTAGE_RANGES_6487):
-            if range_val >= voltage:
-                return range_val
-        return VOLTAGE_RANGES_6487[-1]  # 返回最大量程
 
     def get_error_status(self) -> Optional[str]:
         """获取设备错误状态"""
