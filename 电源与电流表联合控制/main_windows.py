@@ -1,356 +1,381 @@
-import threading
-import time
+# app_window.py
+import sys
+import json
 import csv
-import os
+import time
+import threading
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
+                             QVBoxLayout, QGridLayout, QGroupBox, QLabel,
+                             QLineEdit, QPushButton, QMessageBox, QFileDialog)
+from PyQt5.QtCore import Qt, pyqtSignal, QObject
+from PyQt5.QtGui import QFont
 
 import matplotlib
-matplotlib.use('TkAgg')
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+matplotlib.use('Qt5Agg')
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
+# 假设原控制类在同一目录
 from TDK_Control import TDKPowerSupply
 from Ammeter_Control import KeithleyPicoammeter
 
 
-class MainWindow(tk.Tk):
-	def __init__(self):
-		super().__init__()
-		self.title('TDK 电源与安培表联合控制')
-		self.geometry('1000x700')
-
-		# 设备实例
-		self.tdk = None
-		self.amm = None
-
-		# 数据保存
-		self.data = []  # list of (voltage, current, timestamp)
-
-		# UI 布局
-		self._build_ui()
-
-		# 测量线程控制
-		self._stop_event = threading.Event()
-
-	def _build_ui(self):
-		# 左侧控制区
-		left = ttk.Frame(self)
-		left.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
-
-		# 电源控制区
-		pwr_frame = ttk.LabelFrame(left, text='TDK 电源')
-		pwr_frame.pack(fill=tk.X, pady=4)
-
-		ttk.Label(pwr_frame, text='串口:').grid(row=0, column=0, sticky='w')
-		self.pwr_port = ttk.Entry(pwr_frame)
-		self.pwr_port.grid(row=0, column=1)
-		# 默认电源串口
-		self.pwr_port.insert(0, 'COM11')
-
-		ttk.Label(pwr_frame, text='地址(NSEL):').grid(row=1, column=0, sticky='w')
-		self.pwr_addr = ttk.Entry(pwr_frame)
-		self.pwr_addr.insert(0, '3')
-		self.pwr_addr.grid(row=1, column=1)
-
-		ttk.Button(pwr_frame, text='连接电源', command=self.connect_power).grid(row=2, column=0, pady=4)
-		ttk.Button(pwr_frame, text='断开电源', command=self.disconnect_power).grid(row=2, column=1, pady=4)
-
-		ttk.Label(pwr_frame, text='电压(V):').grid(row=3, column=0, sticky='w')
-		self.voltage_entry = ttk.Entry(pwr_frame)
-		self.voltage_entry.grid(row=3, column=1)
-		ttk.Button(pwr_frame, text='设置电压', command=self.set_voltage).grid(row=3, column=2)
-
-		ttk.Label(pwr_frame, text='电流(A):').grid(row=4, column=0, sticky='w')
-		self.current_entry = ttk.Entry(pwr_frame)
-		self.current_entry.grid(row=4, column=1)
-		ttk.Button(pwr_frame, text='设置电流', command=self.set_current).grid(row=4, column=2)
-
-		ttk.Button(pwr_frame, text='输出 ON', command=lambda: self.set_output(True)).grid(row=5, column=0)
-		ttk.Button(pwr_frame, text='输出 OFF', command=lambda: self.set_output(False)).grid(row=5, column=1)
-
-		# 步进设置
-		step_frame = ttk.LabelFrame(left, text='步进输出设置')
-		step_frame.pack(fill=tk.X, pady=4)
-		ttk.Label(step_frame, text='起始V').grid(row=0, column=0)
-		self.start_v = ttk.Entry(step_frame, width=8)
-		self.start_v.grid(row=0, column=1)
-		ttk.Label(step_frame, text='终止V').grid(row=0, column=2)
-		self.stop_v = ttk.Entry(step_frame, width=8)
-		self.stop_v.grid(row=0, column=3)
-		ttk.Label(step_frame, text='步长V').grid(row=1, column=0)
-		self.step_v = ttk.Entry(step_frame, width=8)
-		self.step_v.grid(row=1, column=1)
-		ttk.Label(step_frame, text='每步时间(s)').grid(row=1, column=2)
-		self.step_time = ttk.Entry(step_frame, width=8)
-		self.step_time.insert(0, '0.2')
-		self.step_time.grid(row=1, column=3)
-
-		ttk.Button(step_frame, text='开始阶梯输出并测量', command=self.start_step_and_measure).grid(row=2, column=0, columnspan=2, pady=6)
-		ttk.Button(step_frame, text='停止', command=self.stop_operations).grid(row=2, column=2, columnspan=2)
-
-		# 安培表控制区
-		amm_frame = ttk.LabelFrame(left, text='安培表 (Keithley)')
-		amm_frame.pack(fill=tk.X, pady=4)
-		ttk.Label(amm_frame, text='串口:').grid(row=0, column=0)
-		self.amm_port = ttk.Entry(amm_frame)
-		self.amm_port.grid(row=0, column=1)
-		# 默认安培表串口
-		self.amm_port.insert(0, 'COM12')
-
-		ttk.Button(amm_frame, text='连接安培表', command=self.connect_amm).grid(row=1, column=0)
-		ttk.Button(amm_frame, text='断开安培表', command=self.disconnect_amm).grid(row=1, column=1)
-
-		ttk.Button(amm_frame, text='选择电源测量', command=self.select_source_measure).grid(row=2, column=0)
-		ttk.Button(amm_frame, text='准备测量', command=self.prepare_measure).grid(row=2, column=1)
-
-		ttk.Label(amm_frame, text='测量步数:').grid(row=3, column=0)
-		self.measure_steps = ttk.Entry(amm_frame, width=6)
-		self.measure_steps.insert(0, '10')
-		self.measure_steps.grid(row=3, column=1)
-
-		ttk.Label(amm_frame, text='测量间隔(s):').grid(row=4, column=0)
-		self.measure_interval = ttk.Entry(amm_frame, width=6)
-		self.measure_interval.insert(0, '0.2')
-		self.measure_interval.grid(row=4, column=1)
-
-		ttk.Button(amm_frame, text='开始测量', command=self.start_measure).grid(row=5, column=0)
-		ttk.Button(amm_frame, text='单次测量', command=self.single_measure).grid(row=5, column=1)
-
-		ttk.Button(left, text='保存数据', command=self.save_data).pack(pady=8)
-
-		# 右侧绘图区
-		right = ttk.Frame(self)
-		right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
-
-		self.fig = Figure(figsize=(6,4), dpi=100)
-		self.ax = self.fig.add_subplot(111)
-		self.ax.set_xlabel('Voltage (V)')
-		self.ax.set_ylabel('Current (A)')
-		self.line, = self.ax.plot([], [], '-o')
-
-		self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-		self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-	# ---------------- Device connection methods ----------------
-	def connect_power(self):
-		port = self.pwr_port.get().strip()
-		addr = int(self.pwr_addr.get().strip() or '1')
-		if not port:
-			messagebox.showwarning('提示','请填写电源串口')
-			return
-		try:
-			ser = __import__('serial').Serial(port, baudrate=9600, timeout=0.5)
-		except Exception as e:
-			messagebox.showerror('串口打开失败', str(e))
-			return
-		self.tdk = TDKPowerSupply(addr, ser)
-		ok = self.tdk.test_communication()
-		messagebox.showinfo('连接电源', '通信成功' if ok else '通信可能失败，请检查')
-
-	def disconnect_power(self):
-		if self.tdk:
-			self.tdk.disconnect()
-			self.tdk = None
-			messagebox.showinfo('断开', '电源已断开')
-
-	def connect_amm(self):
-		port = self.amm_port.get().strip()
-		if not port:
-			messagebox.showwarning('提示','请填写安培表串口')
-			return
-		self.amm = KeithleyPicoammeter(port)
-		ok = self.amm.connect()
-		messagebox.showinfo('连接安培表', '连接成功' if ok else '连接失败')
-
-	def disconnect_amm(self):
-		if self.amm:
-			self.amm.disconnect()
-			self.amm = None
-			messagebox.showinfo('断开', '安培表已断开')
-
-	# ---------------- Power control ----------------
-	def set_voltage(self):
-		if not self.tdk:
-			messagebox.showwarning('未连接', '请先连接电源')
-			return
-		try:
-			v = float(self.voltage_entry.get())
-		except Exception:
-			messagebox.showerror('错误', '无效电压值')
-			return
-		self.tdk.set_voltage(v)
-
-	def set_current(self):
-		if not self.tdk:
-			messagebox.showwarning('未连接', '请先连接电源')
-			return
-		try:
-			i = float(self.current_entry.get())
-		except Exception:
-			messagebox.showerror('错误', '无效电流值')
-			return
-		self.tdk.set_current(i)
-
-	def set_output(self, state: bool):
-		if not self.tdk:
-			messagebox.showwarning('未连接', '请先连接电源')
-			return
-		self.tdk.set_output(state)
-
-	# ---------------- Ammeter specialized controls ----------------
-	def select_source_measure(self):
-		# Placeholder: depending on instrument, selection may require wiring or commands
-		messagebox.showinfo('提示', '请选择电源测量（硬件接线）')
-
-	def prepare_measure(self):
-		if not self.amm:
-			messagebox.showwarning('未连接', '请先连接安培表')
-			return
-		# 按用户要求发送一系列命令
-		cmds = ["*RST", "SYST:ACH ON", "RANG 2e-9", "INIT", "SYST:ZCOR:ACQ", "SYST:ZCOR ON", "RANG:AUTO ON", "SYST:ZCH OFF"]
-		for c in cmds:
-			self.amm.send_command(c)
-			time.sleep(0.05)
-		messagebox.showinfo('准备', '已发送准备测量命令')
-
-	def single_measure(self):
-		if not self.amm:
-			messagebox.showwarning('未连接', '请先连接安培表')
-			return
-		val = self.amm.measure_current()
-		if val is None:
-			messagebox.showerror('测量失败', '未能读取电流')
-			return
-		timestamp = datetime.now().isoformat()
-		# 如果有电源实例，尝试读取实际电压
-		volt = None
-		if self.tdk:
-			volt = self.tdk.get_actual_voltage()
-		self.data.append((volt, val, timestamp))
-		self._update_plot()
-		messagebox.showinfo('测量结果', f'电流: {val} A')
-
-	def start_measure(self):
-		if not self.amm:
-			messagebox.showwarning('未连接', '请先连接安培表')
-			return
-		try:
-			steps = int(self.measure_steps.get())
-			interval = float(self.measure_interval.get())
-		except Exception:
-			messagebox.showerror('错误', '请填写有效的步数与间隔')
-			return
-
-		self._stop_event.clear()
-		t = threading.Thread(target=self._measure_loop, args=(steps, interval), daemon=True)
-		t.start()
-
-	def _measure_loop(self, steps, interval):
-		for i in range(steps):
-			if self._stop_event.is_set():
-				break
-			val = self.amm.measure_current()
-			timestamp = datetime.now().isoformat()
-			volt = None
-			if self.tdk:
-				volt = self.tdk.get_actual_voltage()
-			self.data.append((volt, val, timestamp))
-			self._update_plot()
-			time.sleep(interval)
-
-	def start_step_and_measure(self):
-		if not self.tdk or not self.amm:
-			messagebox.showwarning('未连接', '请先连接电源与安培表')
-			return
-		try:
-			start = float(self.start_v.get())
-			stop = float(self.stop_v.get())
-			step = float(self.step_v.get())
-			step_time = float(self.step_time.get())
-		except Exception:
-			messagebox.showerror('错误', '请填写有效的步进参数')
-			return
-
-		self._stop_event.clear()
-		t = threading.Thread(target=self._step_and_measure_thread, args=(start, stop, step, step_time), daemon=True)
-		t.start()
-
-	def _step_and_measure_thread(self, start, stop, step, step_time):
-		# 构建数列，支持增减
-		if step == 0:
-			return
-		if (stop - start) * step < 0:
-			messagebox.showerror('错误', '步长方向与起止不匹配')
-			return
-		volt = start
-		ascending = step > 0
-		while True:
-			if (ascending and volt > stop) or (not ascending and volt < stop):
-				break
-			if self._stop_event.is_set():
-				break
-			# 设置电压
-			self.tdk.set_voltage(volt)
-			# wait small settle time
-			time.sleep(0.2)
-			# 测量电流
-			cur = self.amm.measure_current()
-			timestamp = datetime.now().isoformat()
-			self.data.append((volt, cur, timestamp))
-			self._update_plot()
-			# 等待该步时长
-			elapsed = 0.0
-			while elapsed < step_time:
-				if self._stop_event.is_set():
-					break
-				time.sleep(0.05)
-				elapsed += 0.05
-			volt += step
-
-	def stop_operations(self):
-		self._stop_event.set()
-		messagebox.showinfo('停止', '已请求停止操作')
-
-	# ---------------- Plot & Save ----------------
-	def _update_plot(self):
-		# 更新 matplotlib 图表，按电压排序
-		xs = [d[0] for d in self.data if d[0] is not None]
-		ys = [d[1] for d in self.data if d[0] is not None]
-		if not xs:
-			return
-		try:
-			self.line.set_data(xs, ys)
-			self.ax.relim()
-			self.ax.autoscale_view()
-			self.canvas.draw_idle()
-		except Exception:
-			pass
-
-	def save_data(self):
-		if not self.data:
-			messagebox.showwarning('无数据', '当前没有数据可保存')
-			return
-		fn = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[('CSV', '*.csv')])
-		if not fn:
-			return
-		try:
-			with open(fn, 'w', newline='') as f:
-				w = csv.writer(f)
-				w.writerow(['voltage_V', 'current_A', 'timestamp'])
-				for row in self.data:
-					w.writerow(row)
-			messagebox.showinfo('保存', f'数据已保存到 {fn}')
-		except Exception as e:
-			messagebox.showerror('保存失败', str(e))
+# ------------ 线程通信 ------------
+class SigEmitter(QObject):
+    append_data = pyqtSignal(tuple)
 
 
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('SIMS RF 控制测量界面')
+        self.resize(640, 360)
+        self._load_geometry()
+
+        # 设备 & 数据
+        self.tdk = None
+        self.amm = None
+        self.data = []
+        self._stop_event = threading.Event()
+
+        # 信号
+        self.sig = SigEmitter()
+        self.sig.append_data.connect(self._on_append_data)
+
+        # 构建 UI
+        self._build_ui()
+
+    # ---------------- UI 构建 ----------------
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_lo = QVBoxLayout(central)
+
+        main_lo.addLayout(self._top_bar())
+        self.canvas = self._build_canvas()
+        main_lo.addWidget(self.canvas, 1)
+        main_lo.addLayout(self._bottom_bar())
+
+    # ---------- 顶部工具栏 ----------
+    def _top_bar(self):
+        lo = QHBoxLayout()
+
+        # TDK
+        g1 = QGroupBox('TDK 电源')
+        g1.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        grid = QGridLayout(g1)
+        self.pwr_port = QLineEdit('COM11')
+        self.pwr_addr = QLineEdit('3')
+        self.voltage_entry = QLineEdit()
+        self.current_entry = QLineEdit()
+        grid.addWidget(QLabel('串口'), 0, 0)
+        grid.addWidget(self.pwr_port, 0, 1)
+        grid.addWidget(QLabel('地址'), 1, 0)
+        grid.addWidget(self.pwr_addr, 1, 1)
+        grid.addWidget(QLabel('电压(V)'), 0, 2)
+        grid.addWidget(self.voltage_entry, 0, 3)
+        grid.addWidget(QLabel('电流(A)'), 1, 2)
+        grid.addWidget(self.current_entry, 1, 3)
+
+        btn_connect_p = QPushButton('连接电源')
+        btn_disconnect_p = QPushButton('断开电源')
+        btn_set_v = QPushButton('设置电压')
+        btn_set_i = QPushButton('设置电流')
+        btn_on = QPushButton('输出 ON')
+        btn_off = QPushButton('输出 OFF')
+        btn_connect_p.clicked.connect(self.connect_power)
+        btn_disconnect_p.clicked.connect(self.disconnect_power)
+        btn_set_v.clicked.connect(self.set_voltage)
+        btn_set_i.clicked.connect(self.set_current)
+        btn_on.clicked.connect(lambda: self.set_output(True))
+        btn_off.clicked.connect(lambda: self.set_output(False))
+
+        grid.addWidget(btn_connect_p, 2, 0)
+        grid.addWidget(btn_disconnect_p, 2, 1)
+        grid.addWidget(btn_set_v, 0, 4)
+        grid.addWidget(btn_set_i, 1, 4)
+        grid.addWidget(btn_on, 2, 2)
+        grid.addWidget(btn_off, 2, 3)
+        lo.addWidget(g1)
+
+        # Keithley
+        g2 = QGroupBox('Keithley 皮安表')
+        g2.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        grid2 = QGridLayout(g2)
+        self.amm_port = QLineEdit('COM12')
+        grid2.addWidget(QLabel('串口'), 0, 0)
+        grid2.addWidget(self.amm_port, 0, 1)
+        btn_connect_a = QPushButton('连接安培表')
+        btn_disconnect_a = QPushButton('断开安培表')
+        btn_src = QPushButton('选择电源测量')
+        btn_prep = QPushButton('准备测量')
+        btn_connect_a.clicked.connect(self.connect_amm)
+        btn_disconnect_a.clicked.connect(self.disconnect_amm)
+        btn_src.clicked.connect(self.select_source_measure)
+        btn_prep.clicked.connect(self.prepare_measure)
+        grid2.addWidget(btn_connect_a, 1, 0)
+        grid2.addWidget(btn_disconnect_a, 1, 1)
+        grid2.addWidget(btn_src, 2, 0)
+        grid2.addWidget(btn_prep, 2, 1)
+        lo.addWidget(g2)
+
+        lo.addStretch()
+        btn_save = QPushButton('保存数据')
+        btn_save.clicked.connect(self.save_data)
+        btn_stop = QPushButton('停止全部')
+        btn_stop.clicked.connect(self.stop_operations)
+        lo.addWidget(btn_save)
+        lo.addWidget(btn_stop)
+        return lo
+
+    # ---------- 底部参数 ----------
+    def _bottom_bar(self):
+        lo = QHBoxLayout()
+
+        # 步进
+        g3 = QGroupBox('步进输出参数')
+        g3.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        grid3 = QGridLayout(g3)
+        self.start_v, self.stop_v, self.step_v, self.step_time = [QLineEdit() for _ in range(4)]
+        self.step_time.setText('0.2')
+        labels = ('起始 V', '终止 V', '步长 V', '每步时间(s)')
+        for i, (lab, w) in enumerate(zip(labels, (self.start_v, self.stop_v, self.step_v, self.step_time))):
+            grid3.addWidget(QLabel(lab), 0, i * 2)
+            grid3.addWidget(w, 0, i * 2 + 1)
+        btn_go = QPushButton('开始阶梯输出并测量')
+        btn_go.clicked.connect(self.start_step_and_measure)
+        grid3.addWidget(btn_go, 1, 0, 1, 8)
+        lo.addWidget(g3)
+
+        # 连续测量
+        g4 = QGroupBox('连续测量参数')
+        g4.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        grid4 = QGridLayout(g4)
+        self.measure_steps = QLineEdit('10')
+        self.measure_interval = QLineEdit('0.2')
+        grid4.addWidget(QLabel('测量步数'), 0, 0)
+        grid4.addWidget(self.measure_steps, 0, 1)
+        grid4.addWidget(QLabel('间隔(s)'), 0, 2)
+        grid4.addWidget(self.measure_interval, 0, 3)
+        h = QHBoxLayout()
+        btn_m = QPushButton('开始测量')
+        btn_m.clicked.connect(self.start_measure)
+        btn_s = QPushButton('单次测量')
+        btn_s.clicked.connect(self.single_measure)
+        h.addWidget(btn_m)
+        h.addWidget(btn_s)
+        grid4.addLayout(h, 1, 0, 1, 4)
+        lo.addWidget(g4)
+        return lo
+
+    # ---------- 绘图 ----------
+    def _build_canvas(self):
+        self.fig = Figure(figsize=(8, 5), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_xlabel('Voltage (V)')
+        self.ax.set_ylabel('Current (A)')
+        self.line, = self.ax.plot([], [], '-o', markersize=4)
+        return FigureCanvas(self.fig)
+
+    # ---------------- 原函数名完全一致 ----------------
+    def connect_power(self):
+        port = self.pwr_port.text().strip()
+        addr = int(self.pwr_addr.text().strip() or '1')
+        if not port:
+            return QMessageBox.warning(self, '提示', '请填写电源串口')
+        try:
+            import serial
+            ser = serial.Serial(port, baudrate=9600, timeout=0.5)
+        except Exception as e:
+            return QMessageBox.critical(self, '串口打开失败', str(e))
+        self.tdk = TDKPowerSupply(addr, ser)
+        ok = self.tdk.test_communication()
+        QMessageBox.information(self, '连接电源', '通信成功' if ok else '通信可能失败，请检查')
+
+    def disconnect_power(self):
+        if self.tdk:
+            self.tdk.disconnect()
+            self.tdk = None
+            QMessageBox.information(self, '断开', '电源已断开')
+
+    def connect_amm(self):
+        port = self.amm_port.text().strip()
+        if not port:
+            return QMessageBox.warning(self, '提示', '请填写安培表串口')
+        self.amm = KeithleyPicoammeter(port)
+        ok = self.amm.connect()
+        QMessageBox.information(self, '连接安培表', '连接成功' if ok else '连接失败')
+
+    def disconnect_amm(self):
+        if self.amm:
+            self.amm.disconnect()
+            self.amm = None
+            QMessageBox.information(self, '断开', '安培表已断开')
+
+    def set_voltage(self):
+        if not self.tdk:
+            return QMessageBox.warning(self, '未连接', '请先连接电源')
+        try:
+            v = float(self.voltage_entry.text())
+        except Exception:
+            return QMessageBox.critical(self, '错误', '无效电压值')
+        self.tdk.set_voltage(v)
+
+    def set_current(self):
+        if not self.tdk:
+            return QMessageBox.warning(self, '未连接', '请先连接电源')
+        try:
+            i = float(self.current_entry.text())
+        except Exception:
+            return QMessageBox.critical(self, '错误', '无效电流值')
+        self.tdk.set_current(i)
+
+    def set_output(self, state: bool):
+        if not self.tdk:
+            return QMessageBox.warning(self, '未连接', '请先连接电源')
+        self.tdk.set_output(state)
+
+    def select_source_measure(self):
+        QMessageBox.information(self, '提示', '请选择电源测量（硬件接线）')
+
+    def prepare_measure(self):
+        if not self.amm:
+            return QMessageBox.warning(self, '未连接', '请先连接安培表')
+        cmds = ["*RST", "SYST:ACH ON", "RANG 2e-9", "INIT", "SYST:ZCOR:ACQ",
+                "SYST:ZCOR ON", "RANG:AUTO ON", "SYST:ZCH OFF"]
+        for c in cmds:
+            self.amm.send_command(c)
+            time.sleep(0.05)
+        QMessageBox.information(self, '准备', '已发送准备测量命令')
+
+    def single_measure(self):
+        if not self.amm:
+            return QMessageBox.warning(self, '未连接', '请先连接安培表')
+        val = self.amm.measure_current()
+        if val is None:
+            return QMessageBox.critical(self, '测量失败', '未能读取电流')
+        volt = self.tdk.get_actual_voltage() if self.tdk else None
+        self.sig.append_data.emit((volt, val, datetime.now().isoformat()))
+
+    def start_measure(self):
+        if not self.amm:
+            return QMessageBox.warning(self, '未连接', '请先连接安培表')
+        try:
+            steps = int(self.measure_steps.text())
+            interval = float(self.measure_interval.text())
+        except Exception:
+            return QMessageBox.critical(self, '错误', '请填写有效的步数与间隔')
+        self._stop_event.clear()
+        threading.Thread(target=self._measure_loop, args=(steps, interval), daemon=True).start()
+
+    def _measure_loop(self, steps, interval):
+        for _ in range(steps):
+            if self._stop_event.is_set():
+                break
+            val = self.amm.measure_current()
+            volt = self.tdk.get_actual_voltage() if self.tdk else None
+            self.sig.append_data.emit((volt, val, datetime.now().isoformat()))
+            time.sleep(interval)
+
+    def start_step_and_measure(self):
+        if not (self.tdk and self.amm):
+            return QMessageBox.warning(self, '未连接', '请先连接电源与安培表')
+        try:
+            start, stop, step, step_time = map(float, (self.start_v.text(), self.stop_v.text(),
+                                                       self.step_v.text(), self.step_time.text()))
+        except Exception:
+            return QMessageBox.critical(self, '错误', '请填写有效的步进参数')
+        if (stop - start) * step < 0:
+            return QMessageBox.critical(self, '错误', '步长方向与起止不匹配')
+        self._stop_event.clear()
+        threading.Thread(target=self._step_and_measure_thread,
+                         args=(start, stop, step, step_time), daemon=True).start()
+
+    def _step_and_measure_thread(self, start, stop, step, step_time):
+        volt, ascending = start, step > 0
+        while True:
+            if (ascending and volt > stop) or (not ascending and volt < stop):
+                break
+            if self._stop_event.is_set():
+                break
+            self.tdk.set_voltage(volt)
+            time.sleep(0.2)
+            cur = self.amm.measure_current()
+            self.sig.append_data.emit((volt, cur, datetime.now().isoformat()))
+            elapsed = 0.0
+            while elapsed < step_time:
+                if self._stop_event.is_set():
+                    break
+                time.sleep(0.05)
+                elapsed += 0.05
+            volt += step
+
+    def stop_operations(self):
+        self._stop_event.set()
+        QMessageBox.information(self, '停止', '已请求停止操作')
+
+    # -------------- 数据 & 绘图 --------------
+    def _on_append_data(self, tup):
+        self.data.append(tup)
+        self._update_plot()
+
+    def _update_plot(self):
+        xs = [d[0] for d in self.data if d[0] is not None]
+        ys = [d[1] for d in self.data if d[0] is not None]
+        if not xs:
+            return
+        self.line.set_data(xs, ys)
+        self.ax.relim()
+        self.ax.autoscale_view()
+        self.fig.canvas.draw_idle()
+
+    def save_data(self):
+        if not self.data:
+            return QMessageBox.warning(self, '无数据', '当前没有数据可保存')
+        fn, _ = QFileDialog.getSaveFileName(self, '保存 CSV', '', 'CSV (*.csv)')
+        if not fn:
+            return
+        try:
+            with open(fn, 'w', newline='') as f:
+                csv.writer(f).writerows([['voltage_V', 'current_A', 'timestamp'], *self.data])
+            QMessageBox.information(self, '保存', f'数据已保存到 {fn}')
+        except Exception as e:
+            QMessageBox.critical(self, '保存失败', str(e))
+
+    # -------------- 几何记忆 --------------
+    def _load_geometry(self):
+        try:
+            with open('gui_geometry.json') as f:
+                geo = json.load(f)
+                self.setGeometry(geo['x'], geo['y'], geo['w'], geo['h'])
+        except Exception:
+            self.resize(500, 700)
+
+    def closeEvent(self, event):
+        try:
+            with open('gui_geometry.json', 'w') as f:
+                r = self.geometry()
+                tmp = r.split('+')
+                w, h = map(int, tmp[0].split('x'))
+                x, y = map(int, tmp[1:])
+                json.dump({'x': x, 'y': y, 'w': w, 'h': h}, f)
+        except Exception:
+            pass
+        event.accept()
+
+    # -------------- 兼容 tk 版启动接口 --------------
+    def mainloop(self):
+        """模拟 tk 的 mainloop"""
+        from PyQt5.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication(sys.argv)
+        self.show()
+        app.exec_()
+
+
+# -------------- 供 main.py 调用的 run() --------------
 def run():
-	app = MainWindow()
-	app.mainloop()
-
-
-if __name__ == '__main__':
-	run()
-
+    app = QApplication.instance() or QApplication(sys.argv)
+    w = MainWindow()
+    w.mainloop()

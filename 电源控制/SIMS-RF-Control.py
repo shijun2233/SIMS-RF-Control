@@ -410,7 +410,6 @@ class PowerThread(QThread):
 
 
 # --------------------------- PowerWidget (single side) ---------------------------
-# --------------------------- PowerWidget (single side) ---------------------------
 class PowerWidget(QWidget):
     set_targets_signal = pyqtSignal(float, float)
 
