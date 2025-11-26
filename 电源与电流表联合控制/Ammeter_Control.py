@@ -133,6 +133,16 @@ class KeithleyPicoammeter:
         return result is not None
 
     # ------------------------------ 电流测量相关 ------------------------------
+    def start_current_measurement(self) -> bool:
+        """启动电流测量模式"""
+        result = self.send_command("FUNC 'CURR'")
+        if result is not None:
+            print("已切换到电流测量模式")
+            return True
+        return False
+
+
+
     def set_current_range(self, range_val: float) -> bool:
         """
         设置电流量程

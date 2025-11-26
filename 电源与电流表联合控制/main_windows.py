@@ -8,7 +8,8 @@ from datetime import datetime
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
                              QVBoxLayout, QGridLayout, QGroupBox, QLabel,
-                             QLineEdit, QPushButton, QMessageBox, QFileDialog)
+                             QLineEdit, QPushButton, QMessageBox, QFileDialog,
+                             QTextEdit)
 from PyQt5.QtCore import Qt, pyqtSignal, QObject
 from PyQt5.QtGui import QFont
 
@@ -53,10 +54,17 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         main_lo = QVBoxLayout(central)
 
+        # 顶部为控制区，随后是参数区，底部为图表与输出终端左右两栏
         main_lo.addLayout(self._top_bar())
-        self.canvas = self._build_canvas()
-        main_lo.addWidget(self.canvas, 1)
         main_lo.addLayout(self._bottom_bar())
+        h = QHBoxLayout()
+        self.canvas = self._build_canvas()
+        h.addWidget(self.canvas, 3)
+        # 输出终端（只读）
+        self.terminal = QTextEdit()
+        self.terminal.setReadOnly(True)
+        h.addWidget(self.terminal, 1)
+        main_lo.addLayout(h)
 
     # ---------- 顶部工具栏 ----------
     def _top_bar(self):
@@ -67,7 +75,7 @@ class MainWindow(QMainWindow):
         g1.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
         grid = QGridLayout(g1)
         self.pwr_port = QLineEdit('COM11')
-        self.pwr_addr = QLineEdit('3')
+        self.pwr_addr = QLineEdit('6')
         self.voltage_entry = QLineEdit()
         self.current_entry = QLineEdit()
         grid.addWidget(QLabel('串口'), 0, 0)
@@ -238,7 +246,31 @@ class MainWindow(QMainWindow):
         self.tdk.set_output(state)
 
     def select_source_measure(self):
-        QMessageBox.information(self, '提示', '请选择电源测量（硬件接线）')
+        # 执行安培表的 start_current_measurement 方法（如果已连接）
+        if not self.amm:
+            return QMessageBox.warning(self, '未连接', '请先连接安培表')
+        ok = False
+        try:
+            ok = self.amm.start_current_measurement()
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'start_current_measurement 失败: {e}')
+            try:
+                self.log(f'start_current_measurement exception: {e}')
+            except Exception:
+                pass
+            return
+        if ok:
+            QMessageBox.information(self, '选择电源测量', '已切换到电流测量（start_current_measurement 返回 True）')
+            try:
+                self.log('select_source_measure: start_current_measurement -> True')
+            except Exception:
+                pass
+        else:
+            QMessageBox.warning(self, '选择电源测量', 'start_current_measurement 返回 False')
+            try:
+                self.log('select_source_measure: start_current_measurement -> False')
+            except Exception:
+                pass
 
     def prepare_measure(self):
         if not self.amm:
@@ -249,6 +281,10 @@ class MainWindow(QMainWindow):
             self.amm.send_command(c)
             time.sleep(0.05)
         QMessageBox.information(self, '准备', '已发送准备测量命令')
+        try:
+            self.log('prepare_measure: sent preparation commands')
+        except Exception:
+            pass
 
     def single_measure(self):
         if not self.amm:
@@ -315,6 +351,16 @@ class MainWindow(QMainWindow):
     def stop_operations(self):
         self._stop_event.set()
         QMessageBox.information(self, '停止', '已请求停止操作')
+
+    def log(self, msg: str):
+        """Append a timestamped message to the output terminal."""
+        ts = datetime.now().isoformat(sep=' ', timespec='seconds')
+        try:
+            # terminal may not exist in some contexts
+            if hasattr(self, 'terminal') and self.terminal is not None:
+                self.terminal.append(f"[{ts}] {msg}")
+        except Exception:
+            pass
 
     # -------------- 数据 & 绘图 --------------
     def _on_append_data(self, tup):
