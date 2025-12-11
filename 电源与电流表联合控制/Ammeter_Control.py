@@ -173,15 +173,20 @@ class KeithleyPicoammeter:
         return False
 
     def measure_current(self) -> Optional[float]:
-        """测量电流（返回实际测量值）"""
-        # 触发测量并返回结果
-        response = self.send_command("READ?", get_response=True)
-        if response is not None:
-            try:
-                return float(response)
-            except ValueError:
-                print(f"电流值解析失败：{response}")
-        return None
+            """测量电流（返回实际测量值）"""
+            # 触发测量并返回结果
+            response = self.send_command("READ?", get_response=True)
+            if response is not None:
+                try:
+                    # 分割响应字符串，取第一个元素（电流值）
+                    current_str = response.strip().split(",")[0][:-1]
+                    # 转换为float类型
+                    current_value = float(current_str)
+                    return current_value
+                except (ValueError, IndexError) as e:
+                    # 捕获值转换失败或分割后无元素的异常
+                    print(f"电流值解析失败：{response}，异常信息：{e}")
+            return None
 
     def set_zero_check(self, enable: bool = True) -> bool:
         """启用/禁用零点检查（连接/断开输入时使用）"""
