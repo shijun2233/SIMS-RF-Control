@@ -18,7 +18,6 @@ import matplotlib
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import matplotlib.dates as mdates
 
 # 假设原控制类在同一目录
 from TDK_Control import TDKPowerSupply
@@ -33,7 +32,7 @@ class SigEmitter(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('SIMS RF 控制测量界面')
+        self.setWindowTitle('能散测量控制界面')
         # 拓宽窗口，保持高度
         self.resize(900, 360)
         self._load_geometry()
@@ -259,7 +258,7 @@ class MainWindow(QMainWindow):
         for i, (lab, w) in enumerate(zip(labels, (self.stop_v, self.step_v, self.step_time))):
             grid3.addWidget(QLabel(lab), 0, i * 2)
             grid3.addWidget(w, 0, i * 2 + 1)
-        btn_go = QPushButton('开始阶梯输出并测量')
+        btn_go = QPushButton('开始能散测量')
         btn_go.clicked.connect(self.start_step_and_measure)
         grid3.addWidget(btn_go, 1, 0, 1, 6)
         lo.addWidget(g3)
@@ -289,7 +288,7 @@ class MainWindow(QMainWindow):
     def _build_canvas(self):
         self.fig = Figure(figsize=(8, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_xlabel('Time')
+        self.ax.set_xlabel('测量点')
         self.ax.set_ylabel('Current (A)')
         self.line, = self.ax.plot([], [], '-o', markersize=4)
         return FigureCanvas(self.fig)
@@ -670,33 +669,13 @@ class MainWindow(QMainWindow):
                 break
             if self._stop_event.is_set():
                 break
-            step_start = time.monotonic()
+            step_start = time.perf_counter()
             self.tdk.set_voltage(volt)
             time.sleep(0.05)  # 简短稳压时间计入总步长
-            cur = None
-            attempts = 0
-            while cur is None and not self._stop_event.is_set():
-                cur = self.amm.measure_current()
-                if cur is None:
-                    attempts += 1
-                    if attempts >= 10:
-                        try:
-                            self.log(f'阶梯测量读取失败, V={volt}, 尝试{attempts}次')
-                        except Exception:
-                            pass
-                        break
-                    time.sleep(0.1)
-            if cur is None:
-                break
-            self.sig.append_data.emit((volt, cur, datetime.now().isoformat()))
-            try:
-                self.log(f'阶梯测量: V={volt} I={cur}')
-            except Exception:
-                pass
             # 在步长的 1/2 处再测一次，严格按时间
             mid_target = step_start + step_time / 2.0
             while not self._stop_event.is_set():
-                now = time.monotonic()
+                now = time.perf_counter()
                 if now >= mid_target:
                     break
                 time.sleep(min(0.01, mid_target - now))
@@ -713,16 +692,17 @@ class MainWindow(QMainWindow):
                             self.log(f'阶梯中点测量失败, V={volt}, 尝试{mid_attempts}次')
                         except Exception:
                             pass
+                        
                         break
                     time.sleep(0.1)
             if mid_cur is None:
                 break
             self.sig.append_data.emit((volt, mid_cur, datetime.now().isoformat()))
             try:
-                self.log(f'阶梯测量(中点): V={volt} I={mid_cur}')
+                self.log(f'阶梯测量: V={volt} I={mid_cur}')
             except Exception:
                 pass
-            elapsed = time.monotonic() - step_start
+            elapsed = time.perf_counter() - step_start
             remaining = step_time - elapsed
             if remaining > 0:
                 waited = 0.0
@@ -766,25 +746,18 @@ class MainWindow(QMainWindow):
         self._update_plot()
 
     def _update_plot(self):
-        # x 轴改为时间，y 轴为电流
-        times, currents = [], []
+        # x 轴为测量点序号，y 轴为电流
+        indices, currents = [], []
         for v, cur, ts in self.data:
-            if ts is None or cur is None:
+            if cur is None:
                 continue
-            try:
-                t = datetime.fromisoformat(ts)
-            except Exception:
-                continue
-            times.append(mdates.date2num(t))
+            indices.append(len(indices) + 1)
             currents.append(cur)
-        if not times:
+        if not indices:
             return
-        self.line.set_data(times, currents)
+        self.line.set_data(indices, currents)
         self.ax.relim()
         self.ax.autoscale_view()
-        # 格式化时间轴
-        self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-        self.fig.autofmt_xdate()
         self.fig.canvas.draw_idle()
 
     def clear_plot(self):
@@ -804,9 +777,9 @@ class MainWindow(QMainWindow):
         try:
             rows = []
             for v, cur, ts in self.data:
-                rows.append([ts, cur])
+                rows.append([ts, v, cur])
             with open(fn, 'w', newline='') as f:
-                csv.writer(f).writerows([['time', 'current_A'], *rows])
+                csv.writer(f).writerows([['time', 'voltage','current_A'], *rows])
             QMessageBox.information(self, '保存', f'数据已保存到 {fn}')
             try:
                 self.log(f'保存数据 -> {fn}')
