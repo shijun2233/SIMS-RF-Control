@@ -1,8 +1,8 @@
 ('F:\\Control\\power '
- 'control\\SIMS\\SIMS-RF-Control\\电源与电流表联合控制\\build\\main\\PYZ-00.pyz',
+ 'control\\SIMS\\SIMS-RF-Control\\能散测量控制软件\\build\\main\\PYZ-00.pyz',
  [('Ammeter_Control',
    'F:\\Control\\power '
-   'control\\SIMS\\SIMS-RF-Control\\电源与电流表联合控制\\Ammeter_Control.py',
+   'control\\SIMS\\SIMS-RF-Control\\能散测量控制软件\\Ammeter_Control.py',
    'PYMODULE'),
   ('PIL',
    'C:\\Users\\29639\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PIL\\__init__.py',
@@ -237,7 +237,7 @@
    'PYMODULE'),
   ('TDK_Control',
    'F:\\Control\\power '
-   'control\\SIMS\\SIMS-RF-Control\\电源与电流表联合控制\\TDK_Control.py',
+   'control\\SIMS\\SIMS-RF-Control\\能散测量控制软件\\TDK_Control.py',
    'PYMODULE'),
   ('__future__',
    'C:\\Users\\29639\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\__future__.py',
@@ -937,7 +937,7 @@
    'PYMODULE'),
   ('main_windows',
    'F:\\Control\\power '
-   'control\\SIMS\\SIMS-RF-Control\\电源与电流表联合控制\\main_windows.py',
+   'control\\SIMS\\SIMS-RF-Control\\能散测量控制软件\\main_windows.py',
    'PYMODULE'),
   ('markupsafe',
    'C:\\Users\\29639\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\markupsafe\\__init__.py',

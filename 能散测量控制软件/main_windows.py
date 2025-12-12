@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
         self.amm = None
         self.data = []
         self._stop_event = threading.Event()
+        self._cont_stop_event = threading.Event()
 
         # 信号
         self.sig = SigEmitter()
@@ -77,9 +78,20 @@ class MainWindow(QMainWindow):
         self.canvas = self._build_canvas()
         h_plot.addWidget(self.canvas)
         right_col.addLayout(h_plot)
-        btn_clear_plot = QPushButton('清理图')
+        ctrl_row = QHBoxLayout()
+        btn_clear_plot = QPushButton('Clear')
+        btn_clear_plot.setStyleSheet('font-size: 14px; padding: 6px 12px;')
+        btn_clear_plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         btn_clear_plot.clicked.connect(self.clear_plot)
-        right_col.addWidget(btn_clear_plot)
+        btn_stop_cont = QPushButton('停止测量')
+        btn_stop_cont.setStyleSheet('font-size: 14px; padding: 6px 12px;')
+        btn_stop_cont.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        btn_stop_cont.clicked.connect(self.stop_continuous_measure)
+        ctrl_row.addWidget(btn_clear_plot)
+        ctrl_row.addWidget(btn_stop_cont)
+        ctrl_row.setStretch(0, 1)
+        ctrl_row.setStretch(1, 1)
+        right_col.addLayout(ctrl_row)
 
         h_main.addLayout(right_col, 3)
         main_lo.addLayout(h_main)
@@ -91,6 +103,7 @@ class MainWindow(QMainWindow):
         # TDK（主电源）
         g1 = QGroupBox('反射栅网电源')
         g1.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        g1.setStyleSheet("QGroupBox { color: blue; border: 2px solid blue; border-radius: 5px; padding-top: 10px; margin-top: 10px; }")
         grid = QGridLayout(g1)
         self.pwr_port = QLineEdit('COM21')
         self.pwr_addr = QLineEdit('7')
@@ -127,6 +140,7 @@ class MainWindow(QMainWindow):
         # Keithley
         g2 = QGroupBox('皮安表')
         g2.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        g2.setStyleSheet("QGroupBox { color: blue; border: 2px solid blue; border-radius: 5px; padding-top: 10px; margin-top: 10px; }")
         grid2 = QGridLayout(g2)
         self.amm_port = QLineEdit('COM12')
         grid2.addWidget(QLabel('串口'), 0, 0)
@@ -156,6 +170,7 @@ class MainWindow(QMainWindow):
         # 透镜电源（端口21-6）
         g3 = QGroupBox('透镜电源')
         g3.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        g3.setStyleSheet("QGroupBox { color: blue; border: 2px solid blue; border-radius: 5px; padding-top: 10px; margin-top: 10px; }")
         grid3 = QGridLayout(g3)
         self.lens_port = QLineEdit('COM21')
         self.lens_addr = QLineEdit('6')
@@ -191,6 +206,7 @@ class MainWindow(QMainWindow):
         # 法拉第杯抑制电源（端口11-6）
         g4 = QGroupBox('抑制电源 ')
         g4.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        g4.setStyleSheet("QGroupBox { color: blue; border: 2px solid blue; border-radius: 5px; padding-top: 10px; margin-top: 10px; }")
         grid4 = QGridLayout(g4)
         self.fcup_port = QLineEdit('COM11')
         self.fcup_addr = QLineEdit('6')
@@ -249,11 +265,12 @@ class MainWindow(QMainWindow):
         lo = QHBoxLayout()
 
         # 步进（去掉起始电压，默认从当前设置/实际电压开始）
-        g3 = QGroupBox('步进输出参数')
+        g3 = QGroupBox('能散测量参数设置')
         g3.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        g3.setStyleSheet("QGroupBox { color: blue; border: 2px solid blue; border-radius: 5px; padding-top: 10px; margin-top: 10px; }")
         grid3 = QGridLayout(g3)
         self.stop_v, self.step_v, self.step_time = [QLineEdit() for _ in range(3)]
-        self.step_time.setText('0.2')
+        self.step_time.setText('1')
         labels = ('终止 V', '步长 V', '每步时间(s)')
         for i, (lab, w) in enumerate(zip(labels, (self.stop_v, self.step_v, self.step_time))):
             grid3.addWidget(QLabel(lab), 0, i * 2)
@@ -266,9 +283,10 @@ class MainWindow(QMainWindow):
         # 连续测量
         g4 = QGroupBox('连续测量参数')
         g4.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
+        g4.setStyleSheet("QGroupBox { color: blue; border: 2px solid blue; border-radius: 5px; padding-top: 10px; margin-top: 10px; }")
         grid4 = QGridLayout(g4)
         self.measure_steps = QLineEdit('10')
-        self.measure_interval = QLineEdit('0.2')
+        self.measure_interval = QLineEdit('1')
         grid4.addWidget(QLabel('测量步数'), 0, 0)
         grid4.addWidget(self.measure_steps, 0, 1)
         grid4.addWidget(QLabel('间隔(s)'), 0, 2)
@@ -288,7 +306,7 @@ class MainWindow(QMainWindow):
     def _build_canvas(self):
         self.fig = Figure(figsize=(8, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_xlabel('测量点')
+        self.ax.set_xlabel('Measure point')
         self.ax.set_ylabel('Current (A)')
         self.line, = self.ax.plot([], [], '-o', markersize=4)
         return FigureCanvas(self.fig)
@@ -619,7 +637,7 @@ class MainWindow(QMainWindow):
             interval = float(self.measure_interval.text())
         except Exception:
             return QMessageBox.critical(self, '错误', '请填写有效的步数与间隔')
-        self._stop_event.clear()
+        self._cont_stop_event.clear()
         try:
             self.log(f'开始连续测量 steps={steps}, interval={interval}s')
         except Exception:
@@ -628,7 +646,7 @@ class MainWindow(QMainWindow):
 
     def _measure_loop(self, steps, interval):
         for _ in range(steps):
-            if self._stop_event.is_set():
+            if self._cont_stop_event.is_set() or self._stop_event.is_set():
                 break
             val = self.amm.measure_current()
             volt = self.tdk.get_actual_voltage() if self.tdk else None
@@ -637,7 +655,22 @@ class MainWindow(QMainWindow):
                 self.log(f'连续测量: V={volt} I={val}')
             except Exception:
                 pass
-            time.sleep(interval)
+            # 间隔内也允许响应停止
+            waited = 0.0
+            while waited < interval:
+                if self._cont_stop_event.is_set() or self._stop_event.is_set():
+                    break
+                slice_wait = min(0.05, interval - waited)
+                time.sleep(slice_wait)
+                waited += slice_wait
+
+    def stop_continuous_measure(self):
+        self._cont_stop_event.set()
+        QMessageBox.information(self, '停止', '已停止当前皮安表连续测量')
+        try:
+            self.log('已请求停止连续测量')
+        except Exception:
+            pass
 
     def start_step_and_measure(self):
         if not (self.tdk and self.amm):
@@ -692,7 +725,6 @@ class MainWindow(QMainWindow):
                             self.log(f'阶梯中点测量失败, V={volt}, 尝试{mid_attempts}次')
                         except Exception:
                             pass
-                        
                         break
                     time.sleep(0.1)
             if mid_cur is None:
