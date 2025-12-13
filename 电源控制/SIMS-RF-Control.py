@@ -493,7 +493,7 @@ class PowerWidget(QWidget):
             QLabel {
                 font-size: 22px;
                 font-weight: bold;
-                color: #333;
+                color: #006400;
             }
         '''
         self.lbl_v.setStyleSheet(large_font_style)
@@ -505,12 +505,23 @@ class PowerWidget(QWidget):
             lbl.setMinimumWidth(150)
             lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        form.addRow('电压:', self.lbl_v)
-        form.addRow('电流:', self.lbl_i)
+        # 创建深绿色标签
+        label_style = 'color: #006400; font-weight: bold;'
+        lbl_voltage_text = QLabel('电压:')
+        lbl_voltage_text.setStyleSheet(label_style)
+        lbl_current_text = QLabel('电流:')
+        lbl_current_text.setStyleSheet(label_style)
+        
+        form.addRow(lbl_voltage_text, self.lbl_v)
+        form.addRow(lbl_current_text, self.lbl_i)
         if self.name == '射频电源':
-            form.addRow('射频功率:', self.lbl_p)
+            lbl_power_text = QLabel('射频功率:')
+            lbl_power_text.setStyleSheet(label_style)
+            form.addRow(lbl_power_text, self.lbl_p)
         else:
-            form.addRow('偏压功率:', self.lbl_p)
+            lbl_power_text = QLabel('偏压功率:')
+            lbl_power_text.setStyleSheet(label_style)
+            form.addRow(lbl_power_text, self.lbl_p)
         output_group.setLayout(form)
 
         # 启动/停止按钮

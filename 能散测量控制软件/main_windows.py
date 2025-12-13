@@ -5,16 +5,20 @@ import csv
 import time
 import threading
 
+import numpy as np
+
 from datetime import datetime
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
                              QVBoxLayout, QGridLayout, QGroupBox, QLabel,
                              QLineEdit, QPushButton, QMessageBox, QFileDialog,
                              QTextEdit, QSizePolicy, QComboBox)
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, pyqtSlot
 from PyQt5.QtGui import QFont
 
 import matplotlib
+from matplotlib import pyplot as plt
+
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -27,6 +31,7 @@ from Ammeter_Control import KeithleyPicoammeter
 # ------------ 线程通信 ------------
 class SigEmitter(QObject):
     append_data = pyqtSignal(tuple)
+    update_display = pyqtSignal(dict)  # 用于更新电源显示数据
 
 
 class MainWindow(QMainWindow):
@@ -46,13 +51,22 @@ class MainWindow(QMainWindow):
         self.data = []
         self._stop_event = threading.Event()
         self._cont_stop_event = threading.Event()
+        self._amm_lock = threading.Lock()  # 避免多线程读取皮安表互相干扰
 
         # 信号
         self.sig = SigEmitter()
         self.sig.append_data.connect(self._on_append_data)
+        self.sig.update_display.connect(self._apply_display_data)
 
         # 构建 UI
         self._build_ui()
+        
+        # 定时器更新电源实时数据
+        from PyQt5.QtCore import QTimer
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self._schedule_display_update)
+        self.update_timer.start(1000)  # 每1000ms更新一次
+        self._updating_display = False  # 防止重复更新
 
     # ---------------- UI 构建 ----------------
     def _build_ui(self):
@@ -120,23 +134,29 @@ class MainWindow(QMainWindow):
 
         btn_connect_p = QPushButton('连接电源')
         btn_disconnect_p = QPushButton('断开电源')
-        btn_set_v = QPushButton('设置电压')
-        btn_set_i = QPushButton('设置电流')
+        btn_set = QPushButton('设置')
         btn_on = QPushButton('输出 ON')
         btn_off = QPushButton('输出 OFF')
         btn_connect_p.clicked.connect(self.connect_power)
         btn_disconnect_p.clicked.connect(self.disconnect_power)
-        btn_set_v.clicked.connect(self.set_voltage)
-        btn_set_i.clicked.connect(self.set_current)
+        btn_set.clicked.connect(self.set_voltage_current)
         btn_on.clicked.connect(lambda: self.set_output(True))
         btn_off.clicked.connect(lambda: self.set_output(False))
 
         grid.addWidget(btn_connect_p, 2, 0)
         grid.addWidget(btn_disconnect_p, 2, 1)
-        grid.addWidget(btn_set_v, 0, 4)
-        grid.addWidget(btn_set_i, 1, 4)
+        grid.addWidget(btn_set, 0, 4, 2, 1)
         grid.addWidget(btn_on, 2, 2)
         grid.addWidget(btn_off, 2, 3)
+        
+        # 实时电压电流显示
+        self.pwr_actual_v = QLabel('电压: 0.000 V')
+        self.pwr_actual_i = QLabel('电流: 0.000 A')
+        label_style = 'color: #006400; font-weight: bold; font-size: 12px;'
+        self.pwr_actual_v.setStyleSheet(label_style)
+        self.pwr_actual_i.setStyleSheet(label_style)
+        grid.addWidget(self.pwr_actual_v, 3, 0, 1, 2)
+        grid.addWidget(self.pwr_actual_i, 3, 2, 1, 2)
         # Keithley
         g2 = QGroupBox('皮安表')
         g2.setFont(QFont('Microsoft YaHei', 11, QFont.Bold))
@@ -186,22 +206,28 @@ class MainWindow(QMainWindow):
         grid3.addWidget(self.lens_i, 1, 3)
         btn_l_connect = QPushButton('连接')
         btn_l_disconnect = QPushButton('断开')
-        btn_l_setv = QPushButton('设电压')
-        btn_l_seti = QPushButton('设电流')
+        btn_l_set = QPushButton('设置')
         btn_l_on = QPushButton('输出 ON')
         btn_l_off = QPushButton('输出 OFF')
         btn_l_connect.clicked.connect(self.connect_lens)
         btn_l_disconnect.clicked.connect(self.disconnect_lens)
-        btn_l_setv.clicked.connect(self.set_lens_voltage)
-        btn_l_seti.clicked.connect(self.set_lens_current)
+        btn_l_set.clicked.connect(self.set_lens_voltage_current)
         btn_l_on.clicked.connect(lambda: self.set_lens_output(True))
         btn_l_off.clicked.connect(lambda: self.set_lens_output(False))
         grid3.addWidget(btn_l_connect, 2, 0)
         grid3.addWidget(btn_l_disconnect, 2, 1)
-        grid3.addWidget(btn_l_setv, 0, 4)
-        grid3.addWidget(btn_l_seti, 1, 4)
+        grid3.addWidget(btn_l_set, 0, 4, 2, 1)
         grid3.addWidget(btn_l_on, 2, 2)
         grid3.addWidget(btn_l_off, 2, 3)
+        
+        # 实时电压电流显示
+        self.lens_actual_v = QLabel('电压: 0.000 V')
+        self.lens_actual_i = QLabel('电流: 0.000 A')
+        label_style = 'color: #006400; font-weight: bold; font-size: 11px;'
+        self.lens_actual_v.setStyleSheet(label_style)
+        self.lens_actual_i.setStyleSheet(label_style)
+        grid3.addWidget(self.lens_actual_v, 3, 0, 1, 2)
+        grid3.addWidget(self.lens_actual_i, 3, 2, 1, 2)
 
         # 法拉第杯抑制电源（端口11-6）
         g4 = QGroupBox('抑制电源 ')
@@ -222,22 +248,28 @@ class MainWindow(QMainWindow):
         grid4.addWidget(self.fcup_i, 1, 3)
         btn_f_connect = QPushButton('连接')
         btn_f_disconnect = QPushButton('断开')
-        btn_f_setv = QPushButton('设电压')
-        btn_f_seti = QPushButton('设电流')
+        btn_f_set = QPushButton('设置')
         btn_f_on = QPushButton('输出 ON')
         btn_f_off = QPushButton('输出 OFF')
         btn_f_connect.clicked.connect(self.connect_fcup)
         btn_f_disconnect.clicked.connect(self.disconnect_fcup)
-        btn_f_setv.clicked.connect(self.set_fcup_voltage)
-        btn_f_seti.clicked.connect(self.set_fcup_current)
+        btn_f_set.clicked.connect(self.set_fcup_voltage_current)
         btn_f_on.clicked.connect(lambda: self.set_fcup_output(True))
         btn_f_off.clicked.connect(lambda: self.set_fcup_output(False))
         grid4.addWidget(btn_f_connect, 2, 0)
         grid4.addWidget(btn_f_disconnect, 2, 1)
-        grid4.addWidget(btn_f_setv, 0, 4)
-        grid4.addWidget(btn_f_seti, 1, 4)
+        grid4.addWidget(btn_f_set, 0, 4, 2, 1)
         grid4.addWidget(btn_f_on, 2, 2)
         grid4.addWidget(btn_f_off, 2, 3)
+        
+        # 实时电压电流显示
+        self.fcup_actual_v = QLabel('电压: 0.000 V')
+        self.fcup_actual_i = QLabel('电流: 0.000 A')
+        label_style = 'color: #006400; font-weight: bold; font-size: 11px;'
+        self.fcup_actual_v.setStyleSheet(label_style)
+        self.fcup_actual_i.setStyleSheet(label_style)
+        grid4.addWidget(self.fcup_actual_v, 3, 0, 1, 2)
+        grid4.addWidget(self.fcup_actual_i, 3, 2, 1, 2)
 
         col.addWidget(g3, 0)
         col.addWidget(g4, 0)
@@ -253,10 +285,10 @@ class MainWindow(QMainWindow):
         lo = QHBoxLayout()
         btn_save = QPushButton('保存数据')
         btn_save.clicked.connect(self.save_data)
-        btn_stop = QPushButton('停止全部')
-        btn_stop.clicked.connect(self.stop_operations)
         lo.addWidget(btn_save)
-        lo.addWidget(btn_stop)
+        hint = QLabel('提示: 清空图片也会清空数据')
+        hint.setStyleSheet('color: #666; font-size: 12px;')
+        lo.addWidget(hint)
         lo.addStretch()
         return lo
 
@@ -308,6 +340,7 @@ class MainWindow(QMainWindow):
         self.ax = self.fig.add_subplot(111)
         self.ax.set_xlabel('Measure point')
         self.ax.set_ylabel('Current (A)')
+        self.ax.ticklabel_format(style='scientific', scilimits=(0,0), axis='y', useOffset=False)
         self.line, = self.ax.plot([], [], '-o', markersize=4)
         return FigureCanvas(self.fig)
 
@@ -336,19 +369,13 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         QMessageBox.information(self, '连接电源', '通信成功' if ok else '通信可能失败，请检查')
-        try:
-            self.log(f'连接主电源 port={port}, addr={addr}, ok={ok}')
-        except Exception:
-            pass
+        self.log(f'连接主电源 port={port}, addr={addr}, ok={ok}')
         # 同口连锁：自动准备透镜电源实例
         if port.lower() == 'com21' and self.tdk_lens is None:
             try:
                 lens_addr = int(self.lens_addr.text().strip() or '6')
                 self.tdk_lens = TDKPowerSupply(lens_addr, ser or self.ser21)
-                try:
-                    self.log(f'连锁自动创建透镜电源 addr={lens_addr}')
-                except Exception:
-                    pass
+                self.log(f'连锁自动创建透镜电源 addr={lens_addr}')
             except Exception:
                 pass
 
@@ -370,10 +397,7 @@ class MainWindow(QMainWindow):
                     pass
                 self.ser21 = None
             QMessageBox.information(self, '断开', '电源已断开')
-            try:
-                self.log('主电源已断开')
-            except Exception:
-                pass
+            self.log('主电源已断开')
 
     def connect_amm(self):
         port = self.amm_port.text().strip()
@@ -382,55 +406,35 @@ class MainWindow(QMainWindow):
         self.amm = KeithleyPicoammeter(port)
         ok = self.amm.connect()
         QMessageBox.information(self, '连接安培表', '连接成功' if ok else '连接失败')
-        try:
-            self.log(f'连接皮安表 port={port}, ok={ok}')
-        except Exception:
-            pass
+        self.log(f'连接皮安表 port={port}, ok={ok}')
+        if ok:
+            # 成功重连后清空数据与图像
+            self.clear_plot()
 
     def disconnect_amm(self):
         if self.amm:
             self.amm.disconnect()
             self.amm = None
             QMessageBox.information(self, '断开', '安培表已断开')
-            try:
-                self.log('皮安表已断开')
-            except Exception:
-                pass
+            self.log('皮安表已断开')
 
-    def set_voltage(self):
+    def set_voltage_current(self):
         if not self.tdk:
             return QMessageBox.warning(self, '未连接', '请先连接电源')
         try:
             v = float(self.voltage_entry.text())
-        except Exception:
-            return QMessageBox.critical(self, '错误', '无效电压值')
-        self.tdk.set_voltage(v)
-        try:
-            self.log(f'主电源设定电压 {v} V')
-        except Exception:
-            pass
-
-    def set_current(self):
-        if not self.tdk:
-            return QMessageBox.warning(self, '未连接', '请先连接电源')
-        try:
             i = float(self.current_entry.text())
         except Exception:
-            return QMessageBox.critical(self, '错误', '无效电流值')
+            return QMessageBox.critical(self, '错误', '无效电压或电流值')
+        self.tdk.set_voltage(v)
         self.tdk.set_current(i)
-        try:
-            self.log(f'主电源设定电流 {i} A')
-        except Exception:
-            pass
+        self.log(f'主电源设定 电压{v}V 电流{i}A')
 
     def set_output(self, state: bool):
         if not self.tdk:
             return QMessageBox.warning(self, '未连接', '请先连接电源')
         self.tdk.set_output(state)
-        try:
-            self.log(f'主电源输出 {"ON" if state else "OFF"}')
-        except Exception:
-            pass
+        self.log(f'主电源输出 {"ON" if state else "OFF"}')
 
     # -------- 透镜电源 (21-6) --------
     def connect_lens(self):
@@ -456,19 +460,13 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         QMessageBox.information(self, '连接透镜电源', '通信成功' if ok else '通信可能失败，请检查')
-        try:
-            self.log(f'连接透镜电源 port={port}, addr={addr}, ok={ok}')
-        except Exception:
-            pass
+        self.log(f'连接透镜电源 port={port}, addr={addr}, ok={ok}')
         # 同口连锁：自动准备主电源实例
         if port.lower() == 'com21' and self.tdk is None:
             try:
                 main_addr = int(self.pwr_addr.text().strip() or '7')
                 self.tdk = TDKPowerSupply(main_addr, ser or self.ser21)
-                try:
-                    self.log(f'连锁自动创建主电源 addr={main_addr}')
-                except Exception:
-                    pass
+                self.log(f'连锁自动创建主电源 addr={main_addr}')
             except Exception:
                 pass
 
@@ -489,45 +487,25 @@ class MainWindow(QMainWindow):
                     pass
                 self.ser21 = None
             QMessageBox.information(self, '断开', '透镜电源已断开')
-            try:
-                self.log('透镜电源已断开')
-            except Exception:
-                pass
+            self.log('透镜电源已断开')
 
-    def set_lens_voltage(self):
+    def set_lens_voltage_current(self):
         if not self.tdk_lens:
             return QMessageBox.warning(self, '未连接', '请先连接透镜电源')
         try:
             v = float(self.lens_v.text())
-        except Exception:
-            return QMessageBox.critical(self, '错误', '无效电压值')
-        self.tdk_lens.set_voltage(v)
-        try:
-            self.log(f'透镜电源设定电压 {v} V')
-        except Exception:
-            pass
-
-    def set_lens_current(self):
-        if not self.tdk_lens:
-            return QMessageBox.warning(self, '未连接', '请先连接透镜电源')
-        try:
             i = float(self.lens_i.text())
         except Exception:
-            return QMessageBox.critical(self, '错误', '无效电流值')
+            return QMessageBox.critical(self, '错误', '无效电压或电流值')
+        self.tdk_lens.set_voltage(v)
         self.tdk_lens.set_current(i)
-        try:
-            self.log(f'透镜电源设定电流 {i} A')
-        except Exception:
-            pass
+        self.log(f'透镜电源设定 电压{v}V 电流{i}A')
 
     def set_lens_output(self, state: bool):
         if not self.tdk_lens:
             return QMessageBox.warning(self, '未连接', '请先连接透镜电源')
         self.tdk_lens.set_output(state)
-        try:
-            self.log(f'透镜电源输出 {"ON" if state else "OFF"}')
-        except Exception:
-            pass
+        self.log(f'透镜电源输出 {"ON" if state else "OFF"}')
 
     # -------- 法拉第杯抑制电源 (11-6) --------
     def connect_fcup(self):
@@ -543,55 +521,32 @@ class MainWindow(QMainWindow):
         self.tdk_fcup = TDKPowerSupply(addr, ser)
         ok = self.tdk_fcup.test_communication()
         QMessageBox.information(self, '连接抑制电源', '通信成功' if ok else '通信可能失败，请检查')
-        try:
-            self.log(f'连接抑制电源 port={port}, addr={addr}, ok={ok}')
-        except Exception:
-            pass
+        self.log(f'连接抑制电源 port={port}, addr={addr}, ok={ok}')
 
     def disconnect_fcup(self):
         if self.tdk_fcup:
             self.tdk_fcup.disconnect()
             self.tdk_fcup = None
             QMessageBox.information(self, '断开', '抑制电源已断开')
-            try:
-                self.log('抑制电源已断开')
-            except Exception:
-                pass
+            self.log('抑制电源已断开')
 
-    def set_fcup_voltage(self):
+    def set_fcup_voltage_current(self):
         if not self.tdk_fcup:
             return QMessageBox.warning(self, '未连接', '请先连接抑制电源')
         try:
             v = float(self.fcup_v.text())
-        except Exception:
-            return QMessageBox.critical(self, '错误', '无效电压值')
-        self.tdk_fcup.set_voltage(v)
-        try:
-            self.log(f'抑制电源设定电压 {v} V')
-        except Exception:
-            pass
-
-    def set_fcup_current(self):
-        if not self.tdk_fcup:
-            return QMessageBox.warning(self, '未连接', '请先连接抑制电源')
-        try:
             i = float(self.fcup_i.text())
         except Exception:
-            return QMessageBox.critical(self, '错误', '无效电流值')
+            return QMessageBox.critical(self, '错误', '无效电压或电流值')
+        self.tdk_fcup.set_voltage(v)
         self.tdk_fcup.set_current(i)
-        try:
-            self.log(f'抑制电源设定电流 {i} A')
-        except Exception:
-            pass
+        self.log(f'抑制电源设定 电压{v}V 电流{i}A')
 
     def set_fcup_output(self, state: bool):
         if not self.tdk_fcup:
             return QMessageBox.warning(self, '未连接', '请先连接抑制电源')
         self.tdk_fcup.set_output(state)
-        try:
-            self.log(f'抑制电源输出 {"ON" if state else "OFF"}')
-        except Exception:
-            pass
+        self.log(f'抑制电源输出 {"ON" if state else "OFF"}')
 
     def apply_range(self):
         # 选择量程仅记录选择，不在此下发命令；命令在 prepare_measure 中统一发送
@@ -602,32 +557,27 @@ class MainWindow(QMainWindow):
             return QMessageBox.warning(self, '未连接', '请先连接安培表')
         rng_text = self.amm_range_combo.currentText().strip()
         if rng_text == '自动':
-            cmds = ["*RST", "SYST:ACH ON", "RANG:AUTO ON", "INIT", "SYST:ZCOR:ACQ",
-                    "SYST:ZCOR ON", "SYST:ZCH OFF"]
+            cmds = ["*RST", "SYST:ACH ON", "RANG 2e-9", "INIT", "SYST:ZCOR:ACQ",
+                    "SYST:ZCOR ON","RANG:AUTO ON", "SYST:ZCH OFF"]
         else:
-            cmds = ["*RST", "SYST:ACH ON", f"RANG {rng_text}", "RANG:AUTO OFF", "INIT", "SYST:ZCOR:ACQ",
+            cmds = ["*RST", "SYST:ACH ON", f"RANG {rng_text}",  "INIT", "SYST:ZCOR:ACQ",
                     "SYST:ZCOR ON", "SYST:ZCH OFF"]
         for c in cmds:
             self.amm.send_command(c)
             time.sleep(0.05)
         QMessageBox.information(self, '准备', '已发送准备测量命令')
-        try:
-            self.log(f'prepare_measure: sent preparation commands, range={rng_text}')
-        except Exception:
-            pass
+        self.log(f'prepare_measure: sent preparation commands, range={rng_text}')
 
     def single_measure(self):
         if not self.amm:
             return QMessageBox.warning(self, '未连接', '请先连接安培表')
-        val = self.amm.measure_current()
+        with self._amm_lock:
+            val = self.amm.measure_current()
         if val is None:
             return QMessageBox.critical(self, '测量失败', '未能读取电流')
         volt = self.tdk.get_actual_voltage() if self.tdk else None
         self.sig.append_data.emit((volt, val, datetime.now().isoformat()))
-        try:
-            self.log(f'单次测量完成: I={val}')
-        except Exception:
-            pass
+        self.log(f'单次测量完成: I={val}')
 
     def start_measure(self):
         if not self.amm:
@@ -638,39 +588,26 @@ class MainWindow(QMainWindow):
         except Exception:
             return QMessageBox.critical(self, '错误', '请填写有效的步数与间隔')
         self._cont_stop_event.clear()
-        try:
-            self.log(f'开始连续测量 steps={steps}, interval={interval}s')
-        except Exception:
-            pass
+        self.log(f'开始连续测量 steps={steps}, interval={interval}s')
         threading.Thread(target=self._measure_loop, args=(steps, interval), daemon=True).start()
 
     def _measure_loop(self, steps, interval):
         for _ in range(steps):
             if self._cont_stop_event.is_set() or self._stop_event.is_set():
                 break
-            val = self.amm.measure_current()
+            with self._amm_lock:
+                val = self.amm.measure_current()
             volt = self.tdk.get_actual_voltage() if self.tdk else None
             self.sig.append_data.emit((volt, val, datetime.now().isoformat()))
-            try:
-                self.log(f'连续测量: V={volt} I={val}')
-            except Exception:
-                pass
-            # 间隔内也允许响应停止
-            waited = 0.0
-            while waited < interval:
-                if self._cont_stop_event.is_set() or self._stop_event.is_set():
-                    break
-                slice_wait = min(0.05, interval - waited)
-                time.sleep(slice_wait)
-                waited += slice_wait
+            self.log(f'连续测量: V={volt} I={val}')
+            # 使用Event.wait()替代循环sleep，响应更快
+            if self._cont_stop_event.wait(interval) or self._stop_event.is_set():
+                break
 
     def stop_continuous_measure(self):
         self._cont_stop_event.set()
         QMessageBox.information(self, '停止', '已停止当前皮安表连续测量')
-        try:
-            self.log('已请求停止连续测量')
-        except Exception:
-            pass
+        self.log('已请求停止连续测量')
 
     def start_step_and_measure(self):
         if not (self.tdk and self.amm):
@@ -686,10 +623,7 @@ class MainWindow(QMainWindow):
         if (stop - start) * step < 0:
             return QMessageBox.critical(self, '错误', '步长方向与起止不匹配')
         self._stop_event.clear()
-        try:
-            self.log(f'开始阶梯输出 start={start}, stop={stop}, step={step}, hold={step_time}s')
-        except Exception:
-            pass
+        self.log(f'开始阶梯输出 start={start}, stop={stop}, step={step}, hold={step_time}s')
         threading.Thread(target=self._step_and_measure_thread,
                          args=(start, stop, step, step_time), daemon=True).start()
 
@@ -705,44 +639,33 @@ class MainWindow(QMainWindow):
             step_start = time.perf_counter()
             self.tdk.set_voltage(volt)
             time.sleep(0.05)  # 简短稳压时间计入总步长
-            # 在步长的 1/2 处再测一次，严格按时间
-            mid_target = step_start + step_time / 2.0
-            while not self._stop_event.is_set():
-                now = time.perf_counter()
-                if now >= mid_target:
-                    break
-                time.sleep(min(0.01, mid_target - now))
+            # 在步长的 1/2 处再测一次，使用Event.wait优化
+            mid_delay = step_time / 2.0
+            if self._stop_event.wait(mid_delay):
+                break
             if self._stop_event.is_set():
                 break
             mid_cur = None
             mid_attempts = 0
             while mid_cur is None and not self._stop_event.is_set():
-                mid_cur = self.amm.measure_current()
+                with self._amm_lock:
+                    mid_cur = self.amm.measure_current()
                 if mid_cur is None:
                     mid_attempts += 1
                     if mid_attempts >= 10:
-                        try:
-                            self.log(f'阶梯中点测量失败, V={volt}, 尝试{mid_attempts}次')
-                        except Exception:
-                            pass
+                        self.log(f'阶梯中点测量失败, V={volt}, 尝试{mid_attempts}次')
                         break
                     time.sleep(0.1)
             if mid_cur is None:
                 break
             self.sig.append_data.emit((volt, mid_cur, datetime.now().isoformat()))
-            try:
-                self.log(f'阶梯测量: V={volt} I={mid_cur}')
-            except Exception:
-                pass
+            self.log(f'阶梯测量: V={volt} I={mid_cur}')
+            # 使用Event.wait等待剩余时间
             elapsed = time.perf_counter() - step_start
             remaining = step_time - elapsed
             if remaining > 0:
-                waited = 0.0
-                # 保持步长总时长接近用户设定
-                while waited < remaining and not self._stop_event.is_set():
-                    slice_wait = min(0.05, remaining - waited)
-                    time.sleep(slice_wait)
-                    waited += slice_wait
+                if self._stop_event.wait(remaining):
+                    break
             # 计算下一步，避免跨过终止值，确保终止值也执行
             next_vol = volt + step
             if ascending and next_vol > stop:
@@ -757,25 +680,84 @@ class MainWindow(QMainWindow):
     def stop_operations(self):
         self._stop_event.set()
         QMessageBox.information(self, '停止', '已请求停止操作')
-        try:
-            self.log('已请求停止所有操作')
-        except Exception:
-            pass
+        self.log('已请求停止所有操作')
 
     def log(self, msg: str):
         """Append a timestamped message to the output terminal."""
+        if not hasattr(self, 'terminal') or self.terminal is None:
+            return
         ts = datetime.now().isoformat(sep=' ', timespec='seconds')
+        self.terminal.append(f"[{ts}] {msg}")
+
+    # -------------- 更新电源显示 --------------
+    def _schedule_display_update(self):
+        """调度后台更新，避免阻塞UI"""
+        if self._updating_display:
+            return  # 上次更新未完成，跳过
+        self._updating_display = True
+        threading.Thread(target=self._update_power_displays_background, daemon=True).start()
+    
+    def _update_power_displays_background(self):
+        """后台线程读取电源数据"""
+        data = {}
         try:
-            # terminal may not exist in some contexts
-            if hasattr(self, 'terminal') and self.terminal is not None:
-                self.terminal.append(f"[{ts}] {msg}")
+            if self.tdk:
+                v = self.tdk.get_actual_voltage()
+                i = self.tdk.get_actual_current()
+                if v is not None and i is not None:
+                    data['pwr'] = (v, i)
         except Exception:
             pass
+        
+        try:
+            if self.tdk_lens:
+                v = self.tdk_lens.get_actual_voltage()
+                i = self.tdk_lens.get_actual_current()
+                if v is not None and i is not None:
+                    data['lens'] = (v, i)
+        except Exception:
+            pass
+        
+        try:
+            if self.tdk_fcup:
+                v = self.tdk_fcup.get_actual_voltage()
+                i = self.tdk_fcup.get_actual_current()
+                if v is not None and i is not None:
+                    data['fcup'] = (v, i)
+        except Exception:
+            pass
+        
+        # 使用信号更新UI（线程安全）
+        if data:
+            self.sig.update_display.emit(data)
+        self._updating_display = False
+    
+    @pyqtSlot(dict)
+    def _apply_display_data(self, data):
+        """在主线程中更新显示（槽函数）"""
+        if 'pwr' in data:
+            v, i = data['pwr']
+            self.pwr_actual_v.setText(f'电压: {v:.3f} V')
+            self.pwr_actual_i.setText(f'电流: {i:.3f} A')
+        if 'lens' in data:
+            v, i = data['lens']
+            self.lens_actual_v.setText(f'电压: {v:.3f} V')
+            self.lens_actual_i.setText(f'电流: {i:.3f} A')
+        if 'fcup' in data:
+            v, i = data['fcup']
+            self.fcup_actual_v.setText(f'电压: {v:.3f} V')
+            self.fcup_actual_i.setText(f'电流: {i:.3f} A')
 
     # -------------- 数据 & 绘图 --------------
     def _on_append_data(self, tup):
         self.data.append(tup)
+        try:
+            v, cur, ts = tup
+            self.log(f"测量数据: time={ts}, V={v}, I={cur}")
+        except Exception:
+            pass
         self._update_plot()
+
 
     def _update_plot(self):
         # x 轴为测量点序号，y 轴为电流
@@ -789,8 +771,9 @@ class MainWindow(QMainWindow):
             return
         self.line.set_data(indices, currents)
         self.ax.relim()
-        self.ax.autoscale_view()
+        self.ax.autoscale_view(tight=True)
         self.fig.canvas.draw_idle()
+
 
     def clear_plot(self):
         """清理图与数据"""
@@ -809,14 +792,11 @@ class MainWindow(QMainWindow):
         try:
             rows = []
             for v, cur, ts in self.data:
-                rows.append([ts, v, cur])
+                rows.append([ts, f'{v}V' if v is not None else '', cur])
             with open(fn, 'w', newline='') as f:
-                csv.writer(f).writerows([['time', 'voltage','current_A'], *rows])
+                csv.writer(f).writerows([['time', 'voltage_V','current_A'], *rows])
             QMessageBox.information(self, '保存', f'数据已保存到 {fn}')
-            try:
-                self.log(f'保存数据 -> {fn}')
-            except Exception:
-                pass
+            self.log(f'保存数据 -> {fn}')
         except Exception as e:
             QMessageBox.critical(self, '保存失败', str(e))
 

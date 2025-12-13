@@ -1,9 +1,9 @@
 ('F:\\Control\\power '
  'control\\SIMS\\SIMS-RF-Control\\能散测量控制软件\\build\\main\\main.exe',
- True,
+ False,
  False,
  True,
- 'C:\\Users\\29639\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\bootloader\\images\\icon-console.ico',
+ 'C:\\Users\\29639\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\bootloader\\images\\icon-windowed.ico',
  None,
  False,
  False,
@@ -81,8 +81,8 @@
  [],
  False,
  False,
- 1765514351,
- [('run.exe',
-   'C:\\Users\\29639\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\run.exe',
+ 1765524364,
+ [('runw.exe',
+   'C:\\Users\\29639\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
    'EXECUTABLE')],
  'C:\\Users\\29639\\AppData\\Local\\Programs\\Python\\Python313\\python313.dll')
